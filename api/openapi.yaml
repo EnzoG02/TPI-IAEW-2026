@@ -1,0 +1,626 @@
+openapi: 3.1.0
+info:
+  title: API Biblioteca digital
+  version: 1.0.0
+  description: |
+    Gestión de títulos digitales, usuarios, préstamos, devoluciones y listas de espera.
+
+    **Seguridad:** OAuth 2.0 `client_credentials` (Auth0) con tokens JWT y scopes por endpoint.
+    Un endpoint auxiliar (`/status/api-key`) usa `x-api-key` solo como comparación.
+
+    **Asincronía:** al crear un préstamo se publica el evento `prestamo.creado` en RabbitMQ
+    (vencimientos, multas y avisos de devolución).
+
+    **WebSocket (fuera del alcance de OpenAPI):** `GET /ws/lista-espera?tituloId={id}` abre un stream
+    que notifica cuando un título con lista de espera vuelve a tener cupo.
+servers:
+  - url: http://localhost:3000
+    description: Entorno local (docker compose)
+
+tags:
+  - name: Titulos
+  - name: Usuarios
+  - name: Prestamos
+  - name: Reservas
+  - name: Operacion
+
+paths:
+  /health:
+    get:
+      tags: [Operacion]
+      summary: Healthcheck (público)
+      security: []
+      responses:
+        '200':
+          description: Servicio operativo
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, examples: [ok] }
+
+  /status/api-key:
+    get:
+      tags: [Operacion]
+      summary: Endpoint protegido con x-api-key (comparación con OAuth 2.0/JWT)
+      security:
+        - ApiKeyAuth: []
+      responses:
+        '200':
+          description: API key válida
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, examples: [autenticado con api key] }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+
+  /titulos:
+    get:
+      tags: [Titulos]
+      summary: Listar títulos
+      security:
+        - OAuth2: [read:titulos]
+      parameters:
+        - name: autor
+          in: query
+          schema: { type: string }
+        - name: soloDisponibles
+          in: query
+          schema: { type: boolean }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: Lista paginada de títulos
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/Titulo' }
+                  page: { type: integer }
+                  pageSize: { type: integer }
+                  total: { type: integer }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+    post:
+      tags: [Titulos]
+      summary: Crear título
+      security:
+        - OAuth2: [write:titulos]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TituloInput' }
+            example:
+              titulo: Ficciones
+              autor: Jorge Luis Borges
+              isbn: 978-0802130303
+              cupoTotal: 2
+      responses:
+        '201':
+          description: Título creado
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Titulo' }
+        '400': { $ref: '#/components/responses/Validacion' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+        '409':
+          description: ISBN ya existente
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /titulos/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      tags: [Titulos]
+      summary: Obtener título
+      security:
+        - OAuth2: [read:titulos]
+      responses:
+        '200':
+          description: Título encontrado
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Titulo' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+        '404': { $ref: '#/components/responses/TituloNoEncontrado' }
+    put:
+      tags: [Titulos]
+      summary: Actualizar título
+      security:
+        - OAuth2: [write:titulos]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TituloInput' }
+      responses:
+        '200':
+          description: Título actualizado
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Titulo' }
+        '400': { $ref: '#/components/responses/Validacion' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+        '404': { $ref: '#/components/responses/TituloNoEncontrado' }
+    delete:
+      tags: [Titulos]
+      summary: Eliminar título
+      security:
+        - OAuth2: [write:titulos]
+      responses:
+        '204':
+          description: Título eliminado
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+        '404': { $ref: '#/components/responses/TituloNoEncontrado' }
+        '409':
+          description: El título tiene préstamos activos
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /usuarios:
+    get:
+      tags: [Usuarios]
+      summary: Listar usuarios
+      security:
+        - OAuth2: [read:usuarios]
+      parameters:
+        - name: estado
+          in: query
+          schema: { $ref: '#/components/schemas/EstadoUsuario' }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: Lista paginada de usuarios
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/Usuario' }
+                  page: { type: integer }
+                  pageSize: { type: integer }
+                  total: { type: integer }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+    post:
+      tags: [Usuarios]
+      summary: Crear usuario
+      security:
+        - OAuth2: [write:usuarios]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UsuarioInput' }
+            example:
+              nombre: Ana Pérez
+              email: ana@example.com
+      responses:
+        '201':
+          description: Usuario creado
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Usuario' }
+        '400': { $ref: '#/components/responses/Validacion' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+        '409':
+          description: Email ya registrado
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /usuarios/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      tags: [Usuarios]
+      summary: Obtener usuario
+      security:
+        - OAuth2: [read:usuarios]
+      responses:
+        '200':
+          description: Usuario encontrado
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Usuario' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+        '404': { $ref: '#/components/responses/UsuarioNoEncontrado' }
+    put:
+      tags: [Usuarios]
+      summary: Actualizar usuario (incluye habilitar/bloquear)
+      security:
+        - OAuth2: [write:usuarios]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UsuarioInput' }
+      responses:
+        '200':
+          description: Usuario actualizado
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Usuario' }
+        '400': { $ref: '#/components/responses/Validacion' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+        '404': { $ref: '#/components/responses/UsuarioNoEncontrado' }
+    delete:
+      tags: [Usuarios]
+      summary: Eliminar usuario
+      security:
+        - OAuth2: [write:usuarios]
+      responses:
+        '204':
+          description: Usuario eliminado
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+        '404': { $ref: '#/components/responses/UsuarioNoEncontrado' }
+
+  /prestamos:
+    get:
+      tags: [Prestamos]
+      summary: Listar préstamos
+      security:
+        - OAuth2: [read:prestamos]
+      parameters:
+        - name: estado
+          in: query
+          schema: { $ref: '#/components/schemas/EstadoPrestamo' }
+        - name: usuarioId
+          in: query
+          schema: { type: integer, format: int64 }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: Lista paginada de préstamos
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/Prestamo' }
+                  page: { type: integer }
+                  pageSize: { type: integer }
+                  total: { type: integer }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+    post:
+      tags: [Prestamos]
+      summary: Prestar un e-book (transacción multi-paso)
+      description: |
+        En una única transacción de base de datos:
+        1. Verifica que el usuario exista y esté `HABILITADO` (403 `USUARIO_BLOQUEADO`).
+        2. Verifica que el título exista (404 `TITULO_NO_ENCONTRADO`).
+        3. Verifica que el usuario no tenga ya un préstamo activo del título (409 `PRESTAMO_DUPLICADO`).
+        4. Verifica cupo disponible (409 `CUPO_AGOTADO`). Si `unirseListaEspera` es `true`,
+           en lugar del error crea una `Reserva` en lista de espera y responde 202.
+        5. Descuenta el cupo, crea el préstamo con su fecha de vencimiento y publica `prestamo.creado`.
+      security:
+        - OAuth2: [write:prestamos]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PrestamoInput' }
+            example:
+              usuarioId: 2
+              tituloId: 1
+              diasPrestamo: 14
+      responses:
+        '201':
+          description: Préstamo creado
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Prestamo' }
+              example:
+                id: 2
+                usuarioId: 2
+                tituloId: 1
+                fechaPrestamo: '2026-09-28T10:00:00Z'
+                fechaVencimiento: '2026-10-12T10:00:00Z'
+                fechaDevolucion: null
+                estado: ACTIVO
+        '202':
+          description: Sin cupo; el usuario quedó en lista de espera
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Reserva' }
+        '400': { $ref: '#/components/responses/Validacion' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403':
+          description: Sin permiso (scope) o usuario bloqueado
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example:
+                code: USUARIO_BLOQUEADO
+                message: El usuario 3 está bloqueado y no puede solicitar préstamos
+                correlationId: 7f3c2a1e-5b6d-4c1a-9a55-0e6a2b7d9f10
+        '404':
+          description: Usuario o título inexistente
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example:
+                code: TITULO_NO_ENCONTRADO
+                message: No existe el título 99
+                correlationId: 7f3c2a1e-5b6d-4c1a-9a55-0e6a2b7d9f10
+        '409':
+          description: Préstamo duplicado o cupo agotado
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              examples:
+                duplicado:
+                  value:
+                    code: PRESTAMO_DUPLICADO
+                    message: El usuario ya tiene un préstamo activo de este título
+                    correlationId: 7f3c2a1e-5b6d-4c1a-9a55-0e6a2b7d9f10
+                cupoAgotado:
+                  value:
+                    code: CUPO_AGOTADO
+                    message: No hay cupo disponible para el título 3
+                    correlationId: 7f3c2a1e-5b6d-4c1a-9a55-0e6a2b7d9f10
+
+  /prestamos/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      tags: [Prestamos]
+      summary: Obtener préstamo
+      security:
+        - OAuth2: [read:prestamos]
+      responses:
+        '200':
+          description: Préstamo encontrado
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Prestamo' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+        '404':
+          description: Préstamo inexistente
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /prestamos/{id}/devolucion:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    post:
+      tags: [Prestamos]
+      summary: Registrar devolución
+      description: Marca el préstamo como `DEVUELTO`, libera cupo y notifica a la lista de espera (WebSocket).
+      security:
+        - OAuth2: [write:prestamos]
+      responses:
+        '200':
+          description: Devolución registrada
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Prestamo' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+        '404':
+          description: Préstamo inexistente
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '409':
+          description: El préstamo ya fue devuelto
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /reservas:
+    get:
+      tags: [Reservas]
+      summary: Listar reservas (lista de espera)
+      security:
+        - OAuth2: [read:prestamos]
+      parameters:
+        - name: tituloId
+          in: query
+          schema: { type: integer, format: int64 }
+        - name: estado
+          in: query
+          schema: { $ref: '#/components/schemas/EstadoReserva' }
+      responses:
+        '200':
+          description: Reservas ordenadas por antigüedad (FIFO)
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Reserva' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+
+components:
+  securitySchemes:
+    OAuth2:
+      type: oauth2
+      description: Auth0 (Machine to Machine) con flujo client_credentials
+      flows:
+        clientCredentials:
+          tokenUrl: https://TU_TENANT.us.auth0.com/oauth/token
+          scopes:
+            read:titulos: Leer títulos
+            write:titulos: Crear, modificar y eliminar títulos
+            read:usuarios: Leer usuarios
+            write:usuarios: Crear, modificar y eliminar usuarios
+            read:prestamos: Leer préstamos y reservas
+            write:prestamos: Crear préstamos y registrar devoluciones
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: x-api-key
+
+  parameters:
+    Id:
+      name: id
+      in: path
+      required: true
+      schema: { type: integer, format: int64 }
+    Page:
+      name: page
+      in: query
+      schema: { type: integer, minimum: 1, default: 1 }
+    PageSize:
+      name: pageSize
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+
+  responses:
+    Validacion:
+      description: Datos de entrada inválidos
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example:
+            code: VALIDACION
+            message: 'cupoTotal debe ser un entero mayor a 0'
+            correlationId: 7f3c2a1e-5b6d-4c1a-9a55-0e6a2b7d9f10
+    NoAutenticado:
+      description: Token ausente, inválido o expirado
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    SinPermiso:
+      description: El token no incluye el scope requerido
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    TituloNoEncontrado:
+      description: Título inexistente
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example:
+            code: TITULO_NO_ENCONTRADO
+            message: No existe el título 99
+            correlationId: 7f3c2a1e-5b6d-4c1a-9a55-0e6a2b7d9f10
+    UsuarioNoEncontrado:
+      description: Usuario inexistente
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+
+  schemas:
+    EstadoUsuario:
+      type: string
+      enum: [HABILITADO, BLOQUEADO]
+    EstadoPrestamo:
+      type: string
+      enum: [ACTIVO, DEVUELTO, VENCIDO]
+    EstadoReserva:
+      type: string
+      enum: [EN_ESPERA, NOTIFICADA, CUMPLIDA, CANCELADA]
+
+    TituloInput:
+      type: object
+      required: [titulo, autor, cupoTotal]
+      properties:
+        titulo: { type: string, maxLength: 200 }
+        autor: { type: string, maxLength: 160 }
+        isbn: { type: [string, 'null'], maxLength: 20 }
+        cupoTotal: { type: integer, minimum: 1 }
+    Titulo:
+      allOf:
+        - $ref: '#/components/schemas/TituloInput'
+        - type: object
+          required: [id, cupoDisponible]
+          properties:
+            id: { type: integer, format: int64 }
+            cupoDisponible: { type: integer, minimum: 0 }
+            createdAt: { type: string, format: date-time }
+
+    UsuarioInput:
+      type: object
+      required: [nombre, email]
+      properties:
+        nombre: { type: string, maxLength: 120 }
+        email: { type: string, format: email }
+        estado: { $ref: '#/components/schemas/EstadoUsuario' }
+    Usuario:
+      allOf:
+        - $ref: '#/components/schemas/UsuarioInput'
+        - type: object
+          required: [id, estado]
+          properties:
+            id: { type: integer, format: int64 }
+            createdAt: { type: string, format: date-time }
+
+    PrestamoInput:
+      type: object
+      required: [usuarioId, tituloId]
+      properties:
+        usuarioId: { type: integer, format: int64 }
+        tituloId: { type: integer, format: int64 }
+        diasPrestamo: { type: integer, minimum: 1, maximum: 60, default: 14 }
+        unirseListaEspera:
+          type: boolean
+          default: false
+          description: Si no hay cupo, crear una reserva en lugar de devolver 409
+    Prestamo:
+      type: object
+      required: [id, usuarioId, tituloId, fechaPrestamo, fechaVencimiento, estado]
+      properties:
+        id: { type: integer, format: int64 }
+        usuarioId: { type: integer, format: int64 }
+        tituloId: { type: integer, format: int64 }
+        fechaPrestamo: { type: string, format: date-time }
+        fechaVencimiento: { type: string, format: date-time }
+        fechaDevolucion: { type: [string, 'null'], format: date-time }
+        estado: { $ref: '#/components/schemas/EstadoPrestamo' }
+
+    Reserva:
+      type: object
+      required: [id, usuarioId, tituloId, estado, posicion]
+      properties:
+        id: { type: integer, format: int64 }
+        usuarioId: { type: integer, format: int64 }
+        tituloId: { type: integer, format: int64 }
+        estado: { $ref: '#/components/schemas/EstadoReserva' }
+        posicion:
+          type: integer
+          minimum: 1
+          description: Posición en la cola (calculada por antigüedad, no almacenada)
+        createdAt: { type: string, format: date-time }
+
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          examples: [CUPO_AGOTADO]
+          description: >
+            VALIDACION, NO_AUTENTICADO, SIN_PERMISO, TITULO_NO_ENCONTRADO, USUARIO_NO_ENCONTRADO,
+            USUARIO_BLOQUEADO, PRESTAMO_DUPLICADO, CUPO_AGOTADO
+        message: { type: string }
+        correlationId: { type: string }

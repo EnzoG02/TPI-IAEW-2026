@@ -1,0 +1,9 @@
+{
+  "name": "biblioteca-worker",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Consumidor de eventos prestamo.creado (placeholder Entrega 1)",
+  "main": "src/index.js",
+  "scripts": { "start": "node src/index.js" },
+  "engines": { "node": ">=20" }
+}
