@@ -9,11 +9,11 @@
 - **Integrantes:**
 
 | Nombre y apellido | Legajo |
-|---|---|---|
-| Ostergar Garcia Bautista| 98019 |
+| :--- | :--- |
+| Ostergar Garcia Bautista | 98019 |
 | Cagnolo Ezequiel | 83630 | 
 | Gardel Enzo Uriel | 98019 |
-| Valverde Segura Fabricio | 96061 | 
+| Valverde Segura Fabricio | 96061 |
 
 ## Problema y alcance
 
