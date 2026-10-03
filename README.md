@@ -4,15 +4,15 @@
 
 ## Proyecto
 
-- **Dominio elegido:** Biblioteca digital (Dominio 5), registrado con la cátedra.
-- **Materia / Comisión:** _completar_
+- **Dominio elegido:** Biblioteca digital (Dominio 5)
+- **Materia / Comisión:** Integración de Aplicaciones en Entorno Web / 5k3
 - **Integrantes:**
 
-| Nombre y apellido | Legajo | Usuario Git |
-|---|---|---|
-| _completar_ | _completar_ | _completar_ |
-| _completar_ | _completar_ | _completar_ |
-| _completar_ | _completar_ | _completar_ |
+| Nombre y apellido | Legajo |
+| Ostergar Garcia Bautista| 98019 |
+| Cagnolo Ezequiel | 83630 | 
+| Gardel Enzo Uriel | 98019 |
+| Valverde Segura Fabricio | 96061 | 
 
 ## Problema y alcance
 
@@ -125,4 +125,4 @@ Las siguientes secciones del checklist del README se completan con la implementa
 
 - **Tag/release:** `v1.0.0`
 - **Hash del último commit:** `COMPLETAR_CON_EL_HASH` (`git rev-parse HEAD`)
-- **Archivo `.zip`:** descargado del repositorio (GitHub → Releases / Code → Download ZIP) y subido a UV/Moodle.
+- **Archivo `.zip`:** subido a UV/Moodle.

@@ -19,4 +19,4 @@ Se usa **PostgreSQL 16**. El control de cupo se hace con `SELECT ... FOR UPDATE`
 - (−) Escalado horizontal más costoso; fuera del alcance del TPI.
 
 ## Migraciones y seed
-Archivos SQL versionados en `db/migrations/` (`001_init.sql`) y `db/seed.sql`. En la Entrega 1 se aplican al iniciar el contenedor de Postgres por primera vez (`docker-entrypoint-initdb.d`). En la Entrega 2 se evaluará un runner (por ejemplo `node-pg-migrate`) para migraciones incrementales.
+Archivos SQL versionados en `db/migrations/` (`001_init.sql`) y `db/seed.sql`.
