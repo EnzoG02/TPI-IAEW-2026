@@ -9,6 +9,7 @@
 - **Integrantes:**
 
 | Nombre y apellido | Legajo |
+|---|---|---|
 | Ostergar Garcia Bautista| 98019 |
 | Cagnolo Ezequiel | 83630 | 
 | Gardel Enzo Uriel | 98019 |
