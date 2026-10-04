@@ -27,11 +27,11 @@ C4Container
   Rel(obs, api, "Scrapea /metrics", "HTTP")
 
   UpdateRelStyle(cliente, auth0, $offsetX="-60", $offsetY="-10")
-  UpdateRelStyle(cliente, api, $offsetX="10", $offsetY="-30")
-  UpdateRelStyle(api, auth0, $offsetX="10", $offsetY="20")
+  UpdateRelStyle(cliente, api, $offsetX="-110", $offsetY="-30")
+  UpdateRelStyle(api, auth0, $offsetX="-20", $offsetY="-10")
   UpdateRelStyle(api, db, $offsetX="-40", $offsetY="-10")
-  UpdateRelStyle(api, broker, $offsetX="10", $offsetY="-10")
-  UpdateRelStyle(broker, worker, $offsetX="0", $offsetY="-15")
-  UpdateRelStyle(worker, db, $offsetX="-20", $offsetY="20")
+  UpdateRelStyle(api, broker, $offsetX="-200", $offsetY="-10")
+  UpdateRelStyle(broker, worker, $offsetX="-30", $offsetY="-15")
+  UpdateRelStyle(worker, db, $offsetX="0", $offsetY="-50")
   UpdateRelStyle(obs, api, $offsetX="0", $offsetY="20")
 ```

@@ -10,7 +10,7 @@
 
 | Nombre y apellido | Legajo |
 | :--- | :--- |
-| Ostergar Garcia Bautista | 98019 |
+| Ostertag Garcia Bautista | 97621 |
 | Cagnolo Ezequiel | 83630 | 
 | Gardel Enzo Uriel | 98019 |
 | Valverde Segura Fabricio | 96061 |

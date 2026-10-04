@@ -20,7 +20,8 @@ C4Context
   Rel(operador, biblioteca, "Observa métricas", "Dashboard")
   Rel(biblioteca, auth0, "Valida firma (JWKS)", "HTTPS")
 
-  UpdateRelStyle(cliente, auth0, $offsetX="-40", $offsetY="-15")
-  UpdateRelStyle(cliente, biblioteca, $offsetX="10", $offsetY="10")
-  UpdateRelStyle(biblioteca, auth0, $offsetX="10", $offsetY="30")
+  UpdateRelStyle(cliente, auth0, $offsetX="-80", $offsetY="-50")
+  UpdateRelStyle(cliente, biblioteca, $offsetX="-90", $offsetY="-10")
+  UpdateRelStyle(operador, biblioteca, $offsetX="-70", $offsetY="10")
+  UpdateRelStyle(biblioteca, auth0, $offsetX="-40", $offsetY="20")
 ```
