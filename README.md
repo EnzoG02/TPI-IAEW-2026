@@ -125,5 +125,5 @@ Las siguientes secciones del checklist del README se completan con la implementa
 ## Evidencia de entrega
 
 - **Tag/release:** `v1.0.0`
-- **Hash del último commit:** `COMPLETAR_CON_EL_HASH` (`git rev-parse HEAD`)
+- **Hash del último commit:** `70a16aa404766ea983aaca7f1d1803b5f576d962` (`git rev-parse HEAD`)
 - **Archivo `.zip`:** subido a UV/Moodle.
