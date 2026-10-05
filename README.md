@@ -141,5 +141,5 @@ Las siguientes secciones del checklist del README se completan con la implementa
 ## Evidencia de entrega
 
 - **Tag/release:** `v1.0.0` (`git checkout v1.0.0`)
-- **Hash del commit entregado:** `COMPLETAR_AL_ETIQUETAR` (el tag `v1.0.0` apunta al commit siguiente, que solo agrega este hash al README)
+- **Hash del commit entregado:** `2d5fccc7fa3b9d7e7310da7a5ede019653b85ef6` (el tag `v1.0.0` apunta al commit siguiente, que solo agrega este hash al README)
 - **Archivo `.zip`:** subido a UV/Moodle.
