@@ -19,4 +19,16 @@ Se usa **PostgreSQL 16**. El control de cupo se hace con `SELECT ... FOR UPDATE`
 - (−) Escalado horizontal más costoso; fuera del alcance del TPI.
 
 ## Migraciones y seed
-Archivos SQL versionados en `db/migrations/` (`001_init.sql`) y `db/seed.sql`.
+- **Entrega 1:** archivos SQL versionados en `db/migrations/` (`001_init.sql`) y `db/seed.sql`, montados en
+  `/docker-entrypoint-initdb.d` de Postgres. Se ejecutan en orden **solo cuando el volumen está vacío**;
+  para reaplicarlos: `docker compose down -v`.
+- **Entrega 2:** como el mecanismo anterior no aplica migraciones nuevas sobre una base existente, se incorpora
+  `node-pg-migrate` (mismo stack que la API). Un paso `npm run migrate` al iniciar la API aplica en orden los
+  archivos de `db/migrations/` que falten y registra cada versión en la tabla `pgmigrations`. Toda modificación
+  del esquema es un archivo nuevo (`002_...`); nunca se edita una migración ya aplicada.
+- El seed queda separado de las migraciones (solo datos de demo) y se puede recargar sin tocar el esquema.
+
+## Borrado de registros
+Las FK no tienen `ON DELETE CASCADE`: borrar un usuario o un título con historial (préstamos, reservas, avisos,
+multas) perdería trazabilidad. La API devuelve 409 (`USUARIO_CON_HISTORIAL` / `TITULO_CON_HISTORIAL`); un usuario
+con historial se da de baja bloqueándolo.

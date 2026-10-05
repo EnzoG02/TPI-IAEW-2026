@@ -4,29 +4,42 @@ info:
   version: 1.0.0
   description: |
     Gestión de títulos digitales, usuarios, préstamos, devoluciones y listas de espera.
+    Las convenciones del contrato (nombres, códigos HTTP, errores, paginación) están en
+    `docs/adr/006-estilo-api.md`.
 
     **Seguridad:** OAuth 2.0 `client_credentials` (Auth0) con tokens JWT y scopes por endpoint.
     Un endpoint auxiliar (`/status/api-key`) usa `x-api-key` solo como comparación.
 
-    **Asincronía:** al crear un préstamo se publica el evento `prestamo.creado` en RabbitMQ
-    (vencimientos, multas y avisos de devolución).
+    **Correlation ID:** cada request puede enviar `X-Correlation-Id`; si no viene, la API genera uno.
+    Se devuelve en el header de la respuesta, en el campo `correlationId` de los errores y en los logs.
 
-    **WebSocket (fuera del alcance de OpenAPI):** `GET /ws/lista-espera?tituloId={id}` abre un stream
-    que notifica cuando un título con lista de espera vuelve a tener cupo.
+    **Asincronía:** al crear un préstamo se publica el evento `prestamo.creado` en RabbitMQ
+    (vencimientos, multas y avisos de devolución). Payload: schema `EventoPrestamoCreado`.
+
+    **WebSocket (fuera del alcance de OpenAPI):** `GET /ws/lista-espera?usuarioId={id}` abre un stream
+    que avisa al usuario cuando un título por el que espera tiene un cupo reservado para él.
+    El handshake exige `Authorization: Bearer` con scope `read:prestamos`.
+    Mensajes: schema `MensajeListaEspera`. Detalle en `docs/adr/005-integracion-websocket.md`.
 servers:
   - url: http://localhost:3000
     description: Entorno local (docker compose)
 
 tags:
   - name: Titulos
+    description: Catálogo de e-books y su cupo de préstamos simultáneos
   - name: Usuarios
+    description: Lectores habilitados o bloqueados para pedir préstamos
   - name: Prestamos
+    description: Préstamo (transacción multi-paso) y devolución de e-books
   - name: Reservas
+    description: Lista de espera por título (FIFO)
   - name: Operacion
+    description: Healthcheck y endpoint de comparación con x-api-key
 
 paths:
   /health:
     get:
+      operationId: getHealth
       tags: [Operacion]
       summary: Healthcheck (público)
       security: []
@@ -39,9 +52,11 @@ paths:
                 type: object
                 properties:
                   status: { type: string, examples: [ok] }
+                  service: { type: string, examples: [api] }
 
   /status/api-key:
     get:
+      operationId: getStatusApiKey
       tags: [Operacion]
       summary: Endpoint protegido con x-api-key (comparación con OAuth 2.0/JWT)
       security:
@@ -59,6 +74,7 @@ paths:
 
   /titulos:
     get:
+      operationId: listTitulos
       tags: [Titulos]
       summary: Listar títulos
       security:
@@ -89,8 +105,10 @@ paths:
         '401': { $ref: '#/components/responses/NoAutenticado' }
         '403': { $ref: '#/components/responses/SinPermiso' }
     post:
+      operationId: createTitulo
       tags: [Titulos]
       summary: Crear título
+      description: El título se crea con `cupoDisponible = cupoTotal`.
       security:
         - OAuth2: [write:titulos]
       requestBody:
@@ -99,16 +117,26 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/TituloInput' }
             example:
-              titulo: Ficciones
-              autor: Jorge Luis Borges
-              isbn: 978-0802130303
+              titulo: Pedro Páramo
+              autor: Juan Rulfo
+              isbn: 978-8437604183
               cupoTotal: 2
       responses:
         '201':
           description: Título creado
+          headers:
+            Location: { $ref: '#/components/headers/Location' }
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Titulo' }
+              example:
+                id: 5
+                titulo: Pedro Páramo
+                autor: Juan Rulfo
+                isbn: 978-8437604183
+                cupoTotal: 2
+                cupoDisponible: 2
+                createdAt: '2026-09-28T10:00:00Z'
         '400': { $ref: '#/components/responses/Validacion' }
         '401': { $ref: '#/components/responses/NoAutenticado' }
         '403': { $ref: '#/components/responses/SinPermiso' }
@@ -117,11 +145,16 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }
+              example:
+                code: ISBN_DUPLICADO
+                message: Ya existe un título con ISBN 978-8437604183
+                correlationId: 7f3c2a1e-5b6d-4c1a-9a55-0e6a2b7d9f10
 
   /titulos/{id}:
     parameters:
       - $ref: '#/components/parameters/Id'
     get:
+      operationId: getTitulo
       tags: [Titulos]
       summary: Obtener título
       security:
@@ -136,8 +169,13 @@ paths:
         '403': { $ref: '#/components/responses/SinPermiso' }
         '404': { $ref: '#/components/responses/TituloNoEncontrado' }
     put:
+      operationId: updateTitulo
       tags: [Titulos]
       summary: Actualizar título
+      description: |
+        Reemplazo completo. Si cambia `cupoTotal`, la API recalcula `cupoDisponible`
+        (`cupoTotal` − préstamos sin devolver). No se puede bajar `cupoTotal` por debajo de los
+        préstamos sin devolver (409 `CUPO_INVALIDO`).
       security:
         - OAuth2: [write:titulos]
       requestBody:
@@ -155,9 +193,20 @@ paths:
         '401': { $ref: '#/components/responses/NoAutenticado' }
         '403': { $ref: '#/components/responses/SinPermiso' }
         '404': { $ref: '#/components/responses/TituloNoEncontrado' }
+        '409':
+          description: ISBN ya existente o cupoTotal menor que los préstamos sin devolver
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example:
+                code: CUPO_INVALIDO
+                message: El título 3 tiene 1 préstamo sin devolver; cupoTotal no puede ser menor
+                correlationId: 7f3c2a1e-5b6d-4c1a-9a55-0e6a2b7d9f10
     delete:
+      operationId: deleteTitulo
       tags: [Titulos]
       summary: Eliminar título
+      description: Solo se puede eliminar un título sin historial (préstamos o reservas de cualquier estado).
       security:
         - OAuth2: [write:titulos]
       responses:
@@ -167,13 +216,18 @@ paths:
         '403': { $ref: '#/components/responses/SinPermiso' }
         '404': { $ref: '#/components/responses/TituloNoEncontrado' }
         '409':
-          description: El título tiene préstamos activos
+          description: El título tiene préstamos o reservas registrados
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }
+              example:
+                code: TITULO_CON_HISTORIAL
+                message: El título 3 tiene préstamos o reservas registrados y no puede eliminarse
+                correlationId: 7f3c2a1e-5b6d-4c1a-9a55-0e6a2b7d9f10
 
   /usuarios:
     get:
+      operationId: listUsuarios
       tags: [Usuarios]
       summary: Listar usuarios
       security:
@@ -201,6 +255,7 @@ paths:
         '401': { $ref: '#/components/responses/NoAutenticado' }
         '403': { $ref: '#/components/responses/SinPermiso' }
     post:
+      operationId: createUsuario
       tags: [Usuarios]
       summary: Crear usuario
       security:
@@ -211,27 +266,32 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/UsuarioInput' }
             example:
-              nombre: Ana Pérez
-              email: ana@example.com
+              nombre: Elena Martínez
+              email: elena@example.com
       responses:
         '201':
           description: Usuario creado
+          headers:
+            Location: { $ref: '#/components/headers/Location' }
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Usuario' }
+              example:
+                id: 5
+                nombre: Elena Martínez
+                email: elena@example.com
+                estado: HABILITADO
+                createdAt: '2026-09-28T10:00:00Z'
         '400': { $ref: '#/components/responses/Validacion' }
         '401': { $ref: '#/components/responses/NoAutenticado' }
         '403': { $ref: '#/components/responses/SinPermiso' }
-        '409':
-          description: Email ya registrado
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/Error' }
+        '409': { $ref: '#/components/responses/EmailDuplicado' }
 
   /usuarios/{id}:
     parameters:
       - $ref: '#/components/parameters/Id'
     get:
+      operationId: getUsuario
       tags: [Usuarios]
       summary: Obtener usuario
       security:
@@ -246,6 +306,7 @@ paths:
         '403': { $ref: '#/components/responses/SinPermiso' }
         '404': { $ref: '#/components/responses/UsuarioNoEncontrado' }
     put:
+      operationId: updateUsuario
       tags: [Usuarios]
       summary: Actualizar usuario (incluye habilitar/bloquear)
       security:
@@ -255,6 +316,10 @@ paths:
         content:
           application/json:
             schema: { $ref: '#/components/schemas/UsuarioInput' }
+            example:
+              nombre: Carla Ruiz
+              email: carla@example.com
+              estado: HABILITADO
       responses:
         '200':
           description: Usuario actualizado
@@ -265,9 +330,14 @@ paths:
         '401': { $ref: '#/components/responses/NoAutenticado' }
         '403': { $ref: '#/components/responses/SinPermiso' }
         '404': { $ref: '#/components/responses/UsuarioNoEncontrado' }
+        '409': { $ref: '#/components/responses/EmailDuplicado' }
     delete:
+      operationId: deleteUsuario
       tags: [Usuarios]
       summary: Eliminar usuario
+      description: |
+        Solo se puede eliminar un usuario sin historial (préstamos, reservas o multas).
+        Para dar de baja a un usuario con historial se lo bloquea con `PUT` (`estado: BLOQUEADO`).
       security:
         - OAuth2: [write:usuarios]
       responses:
@@ -276,9 +346,19 @@ paths:
         '401': { $ref: '#/components/responses/NoAutenticado' }
         '403': { $ref: '#/components/responses/SinPermiso' }
         '404': { $ref: '#/components/responses/UsuarioNoEncontrado' }
+        '409':
+          description: El usuario tiene historial
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example:
+                code: USUARIO_CON_HISTORIAL
+                message: El usuario 1 tiene préstamos registrados; bloquearlo en lugar de eliminarlo
+                correlationId: 7f3c2a1e-5b6d-4c1a-9a55-0e6a2b7d9f10
 
   /prestamos:
     get:
+      operationId: listPrestamos
       tags: [Prestamos]
       summary: Listar préstamos
       security:
@@ -309,16 +389,23 @@ paths:
         '401': { $ref: '#/components/responses/NoAutenticado' }
         '403': { $ref: '#/components/responses/SinPermiso' }
     post:
+      operationId: createPrestamo
       tags: [Prestamos]
       summary: Prestar un e-book (transacción multi-paso)
       description: |
         En una única transacción de base de datos:
-        1. Verifica que el usuario exista y esté `HABILITADO` (403 `USUARIO_BLOQUEADO`).
-        2. Verifica que el título exista (404 `TITULO_NO_ENCONTRADO`).
-        3. Verifica que el usuario no tenga ya un préstamo activo del título (409 `PRESTAMO_DUPLICADO`).
-        4. Verifica cupo disponible (409 `CUPO_AGOTADO`). Si `unirseListaEspera` es `true`,
-           en lugar del error crea una `Reserva` en lista de espera y responde 202.
-        5. Descuenta el cupo, crea el préstamo con su fecha de vencimiento y publica `prestamo.creado`.
+        1. Verifica que el usuario exista (404 `USUARIO_NO_ENCONTRADO`) y esté `HABILITADO` (403 `USUARIO_BLOQUEADO`).
+        2. Verifica que el usuario no tenga préstamos `VENCIDO` sin devolver (403 `PRESTAMOS_VENCIDOS`).
+        3. Verifica que el título exista (404 `TITULO_NO_ENCONTRADO`) y lo bloquea con `SELECT ... FOR UPDATE`.
+        4. Verifica que el usuario no tenga ya un préstamo sin devolver del título (409 `PRESTAMO_DUPLICADO`).
+        5. Respeta la lista de espera: el cupo libre para el solicitante es `cupoDisponible` menos las
+           reservas `NOTIFICADA` de **otros** usuarios (ese cupo está guardado para ellos).
+           Si no queda cupo libre responde 409 `CUPO_AGOTADO`, o, si `unirseListaEspera` es `true`,
+           crea una `Reserva` `EN_ESPERA` y responde 202 (409 `RESERVA_DUPLICADA` si ya estaba en la cola).
+        6. Si el solicitante tenía una reserva `NOTIFICADA` del título, la marca `CUMPLIDA`.
+        7. Descuenta el cupo y crea el préstamo con `fechaVencimiento = ahora + diasPrestamo`.
+
+        Después del commit publica `prestamo.creado` en RabbitMQ (ver ADR 004).
       security:
         - OAuth2: [write:prestamos]
       requestBody:
@@ -326,18 +413,29 @@ paths:
         content:
           application/json:
             schema: { $ref: '#/components/schemas/PrestamoInput' }
-            example:
-              usuarioId: 2
-              tituloId: 1
-              diasPrestamo: 14
+            examples:
+              prestamo:
+                summary: Préstamo con cupo (201)
+                value:
+                  usuarioId: 2
+                  tituloId: 1
+                  diasPrestamo: 14
+              listaEspera:
+                summary: Sin cupo, unirse a la lista de espera (202; usuario creado con POST /usuarios)
+                value:
+                  usuarioId: 5
+                  tituloId: 3
+                  unirseListaEspera: true
       responses:
         '201':
           description: Préstamo creado
+          headers:
+            Location: { $ref: '#/components/headers/Location' }
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Prestamo' }
               example:
-                id: 2
+                id: 3
                 usuarioId: 2
                 tituloId: 1
                 fechaPrestamo: '2026-09-28T10:00:00Z'
@@ -345,32 +443,53 @@ paths:
                 fechaDevolucion: null
                 estado: ACTIVO
         '202':
-          description: Sin cupo; el usuario quedó en lista de espera
+          description: Sin cupo; el usuario quedó en lista de espera (el préstamo no se concretó)
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Reserva' }
+              example:
+                id: 2
+                usuarioId: 5
+                tituloId: 3
+                estado: EN_ESPERA
+                posicion: 2
+                createdAt: '2026-09-28T10:00:00Z'
         '400': { $ref: '#/components/responses/Validacion' }
         '401': { $ref: '#/components/responses/NoAutenticado' }
         '403':
-          description: Sin permiso (scope) o usuario bloqueado
+          description: Sin permiso (scope), usuario bloqueado o con préstamos vencidos
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }
-              example:
-                code: USUARIO_BLOQUEADO
-                message: El usuario 3 está bloqueado y no puede solicitar préstamos
-                correlationId: 7f3c2a1e-5b6d-4c1a-9a55-0e6a2b7d9f10
+              examples:
+                bloqueado:
+                  value:
+                    code: USUARIO_BLOQUEADO
+                    message: El usuario 3 está bloqueado y no puede solicitar préstamos
+                    correlationId: 7f3c2a1e-5b6d-4c1a-9a55-0e6a2b7d9f10
+                vencidos:
+                  value:
+                    code: PRESTAMOS_VENCIDOS
+                    message: El usuario 4 tiene préstamos vencidos sin devolver
+                    correlationId: 7f3c2a1e-5b6d-4c1a-9a55-0e6a2b7d9f10
         '404':
           description: Usuario o título inexistente
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }
-              example:
-                code: TITULO_NO_ENCONTRADO
-                message: No existe el título 99
-                correlationId: 7f3c2a1e-5b6d-4c1a-9a55-0e6a2b7d9f10
+              examples:
+                titulo:
+                  value:
+                    code: TITULO_NO_ENCONTRADO
+                    message: No existe el título 99
+                    correlationId: 7f3c2a1e-5b6d-4c1a-9a55-0e6a2b7d9f10
+                usuario:
+                  value:
+                    code: USUARIO_NO_ENCONTRADO
+                    message: No existe el usuario 99
+                    correlationId: 7f3c2a1e-5b6d-4c1a-9a55-0e6a2b7d9f10
         '409':
-          description: Préstamo duplicado o cupo agotado
+          description: Préstamo duplicado, cupo agotado o reserva duplicada
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }
@@ -378,18 +497,24 @@ paths:
                 duplicado:
                   value:
                     code: PRESTAMO_DUPLICADO
-                    message: El usuario ya tiene un préstamo activo de este título
+                    message: El usuario ya tiene un préstamo sin devolver de este título
                     correlationId: 7f3c2a1e-5b6d-4c1a-9a55-0e6a2b7d9f10
                 cupoAgotado:
                   value:
                     code: CUPO_AGOTADO
                     message: No hay cupo disponible para el título 3
                     correlationId: 7f3c2a1e-5b6d-4c1a-9a55-0e6a2b7d9f10
+                reservaDuplicada:
+                  value:
+                    code: RESERVA_DUPLICADA
+                    message: El usuario ya está en la lista de espera del título 3
+                    correlationId: 7f3c2a1e-5b6d-4c1a-9a55-0e6a2b7d9f10
 
   /prestamos/{id}:
     parameters:
       - $ref: '#/components/parameters/Id'
     get:
+      operationId: getPrestamo
       tags: [Prestamos]
       summary: Obtener préstamo
       security:
@@ -402,19 +527,19 @@ paths:
               schema: { $ref: '#/components/schemas/Prestamo' }
         '401': { $ref: '#/components/responses/NoAutenticado' }
         '403': { $ref: '#/components/responses/SinPermiso' }
-        '404':
-          description: Préstamo inexistente
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/Error' }
+        '404': { $ref: '#/components/responses/PrestamoNoEncontrado' }
 
   /prestamos/{id}/devolucion:
     parameters:
       - $ref: '#/components/parameters/Id'
     post:
+      operationId: devolverPrestamo
       tags: [Prestamos]
       summary: Registrar devolución
-      description: Marca el préstamo como `DEVUELTO`, libera cupo y notifica a la lista de espera (WebSocket).
+      description: |
+        Marca el préstamo (`ACTIVO` o `VENCIDO`) como `DEVUELTO` y libera el cupo.
+        Si el título tiene reservas `EN_ESPERA`, la primera de la cola pasa a `NOTIFICADA`
+        (el cupo queda guardado para ese usuario) y se le avisa por WebSocket.
       security:
         - OAuth2: [write:prestamos]
       responses:
@@ -423,21 +548,30 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Prestamo' }
+              example:
+                id: 1
+                usuarioId: 1
+                tituloId: 3
+                fechaPrestamo: '2026-09-28T10:00:00Z'
+                fechaVencimiento: '2026-10-12T10:00:00Z'
+                fechaDevolucion: '2026-10-01T15:30:00Z'
+                estado: DEVUELTO
         '401': { $ref: '#/components/responses/NoAutenticado' }
         '403': { $ref: '#/components/responses/SinPermiso' }
-        '404':
-          description: Préstamo inexistente
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/Error' }
+        '404': { $ref: '#/components/responses/PrestamoNoEncontrado' }
         '409':
           description: El préstamo ya fue devuelto
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }
+              example:
+                code: PRESTAMO_YA_DEVUELTO
+                message: El préstamo 1 ya fue devuelto
+                correlationId: 7f3c2a1e-5b6d-4c1a-9a55-0e6a2b7d9f10
 
   /reservas:
     get:
+      operationId: listReservas
       tags: [Reservas]
       summary: Listar reservas (lista de espera)
       security:
@@ -457,6 +591,13 @@ paths:
               schema:
                 type: array
                 items: { $ref: '#/components/schemas/Reserva' }
+              example:
+                - id: 1
+                  usuarioId: 2
+                  tituloId: 3
+                  estado: EN_ESPERA
+                  posicion: 1
+                  createdAt: '2026-09-28T09:00:00Z'
         '401': { $ref: '#/components/responses/NoAutenticado' }
         '403': { $ref: '#/components/responses/SinPermiso' }
 
@@ -473,7 +614,7 @@ components:
             write:titulos: Crear, modificar y eliminar títulos
             read:usuarios: Leer usuarios
             write:usuarios: Crear, modificar y eliminar usuarios
-            read:prestamos: Leer préstamos y reservas
+            read:prestamos: Leer préstamos y reservas; suscribirse al WebSocket de lista de espera
             write:prestamos: Crear préstamos y registrar devoluciones
     ApiKeyAuth:
       type: apiKey
@@ -495,6 +636,11 @@ components:
       in: query
       schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
 
+  headers:
+    Location:
+      description: URL del recurso creado
+      schema: { type: string, examples: [/prestamos/3] }
+
   responses:
     Validacion:
       description: Datos de entrada inválidos
@@ -506,15 +652,23 @@ components:
             message: 'cupoTotal debe ser un entero mayor a 0'
             correlationId: 7f3c2a1e-5b6d-4c1a-9a55-0e6a2b7d9f10
     NoAutenticado:
-      description: Token ausente, inválido o expirado
+      description: Credencial ausente, inválida o expirada (token Bearer o x-api-key)
       content:
         application/json:
           schema: { $ref: '#/components/schemas/Error' }
+          example:
+            code: NO_AUTENTICADO
+            message: Token ausente, inválido o expirado
+            correlationId: 7f3c2a1e-5b6d-4c1a-9a55-0e6a2b7d9f10
     SinPermiso:
       description: El token no incluye el scope requerido
       content:
         application/json:
           schema: { $ref: '#/components/schemas/Error' }
+          example:
+            code: SIN_PERMISO
+            message: 'Se requiere el scope write:titulos'
+            correlationId: 7f3c2a1e-5b6d-4c1a-9a55-0e6a2b7d9f10
     TituloNoEncontrado:
       description: Título inexistente
       content:
@@ -529,6 +683,28 @@ components:
       content:
         application/json:
           schema: { $ref: '#/components/schemas/Error' }
+          example:
+            code: USUARIO_NO_ENCONTRADO
+            message: No existe el usuario 99
+            correlationId: 7f3c2a1e-5b6d-4c1a-9a55-0e6a2b7d9f10
+    PrestamoNoEncontrado:
+      description: Préstamo inexistente
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example:
+            code: PRESTAMO_NO_ENCONTRADO
+            message: No existe el préstamo 99
+            correlationId: 7f3c2a1e-5b6d-4c1a-9a55-0e6a2b7d9f10
+    EmailDuplicado:
+      description: Email ya registrado por otro usuario
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example:
+            code: EMAIL_DUPLICADO
+            message: Ya existe un usuario con email ana@example.com
+            correlationId: 7f3c2a1e-5b6d-4c1a-9a55-0e6a2b7d9f10
 
   schemas:
     EstadoUsuario:
@@ -545,10 +721,13 @@ components:
       type: object
       required: [titulo, autor, cupoTotal]
       properties:
-        titulo: { type: string, maxLength: 200 }
-        autor: { type: string, maxLength: 160 }
+        titulo: { type: string, minLength: 1, maxLength: 200 }
+        autor: { type: string, minLength: 1, maxLength: 160 }
         isbn: { type: [string, 'null'], maxLength: 20 }
-        cupoTotal: { type: integer, minimum: 1 }
+        cupoTotal:
+          type: integer
+          minimum: 1
+          description: Cantidad de préstamos simultáneos permitidos (licencias del e-book)
     Titulo:
       allOf:
         - $ref: '#/components/schemas/TituloInput'
@@ -556,16 +735,21 @@ components:
           required: [id, cupoDisponible]
           properties:
             id: { type: integer, format: int64 }
-            cupoDisponible: { type: integer, minimum: 0 }
+            cupoDisponible:
+              type: integer
+              minimum: 0
+              description: Calculado por la API; no se envía en el input
             createdAt: { type: string, format: date-time }
 
     UsuarioInput:
       type: object
       required: [nombre, email]
       properties:
-        nombre: { type: string, maxLength: 120 }
-        email: { type: string, format: email }
-        estado: { $ref: '#/components/schemas/EstadoUsuario' }
+        nombre: { type: string, minLength: 1, maxLength: 120 }
+        email: { type: string, format: email, maxLength: 160 }
+        estado:
+          $ref: '#/components/schemas/EstadoUsuario'
+          default: HABILITADO
     Usuario:
       allOf:
         - $ref: '#/components/schemas/UsuarioInput'
@@ -600,16 +784,16 @@ components:
 
     Reserva:
       type: object
-      required: [id, usuarioId, tituloId, estado, posicion]
+      required: [id, usuarioId, tituloId, estado]
       properties:
         id: { type: integer, format: int64 }
         usuarioId: { type: integer, format: int64 }
         tituloId: { type: integer, format: int64 }
         estado: { $ref: '#/components/schemas/EstadoReserva' }
         posicion:
-          type: integer
+          type: [integer, 'null']
           minimum: 1
-          description: Posición en la cola (calculada por antigüedad, no almacenada)
+          description: Posición en la cola (calculada por antigüedad, no almacenada); null si no está EN_ESPERA
         createdAt: { type: string, format: date-time }
 
     Error:
@@ -618,9 +802,72 @@ components:
       properties:
         code:
           type: string
-          examples: [CUPO_AGOTADO]
-          description: >
-            VALIDACION, NO_AUTENTICADO, SIN_PERMISO, TITULO_NO_ENCONTRADO, USUARIO_NO_ENCONTRADO,
-            USUARIO_BLOQUEADO, PRESTAMO_DUPLICADO, CUPO_AGOTADO
+          enum:
+            - VALIDACION
+            - NO_AUTENTICADO
+            - SIN_PERMISO
+            - TITULO_NO_ENCONTRADO
+            - USUARIO_NO_ENCONTRADO
+            - PRESTAMO_NO_ENCONTRADO
+            - USUARIO_BLOQUEADO
+            - PRESTAMOS_VENCIDOS
+            - PRESTAMO_DUPLICADO
+            - CUPO_AGOTADO
+            - RESERVA_DUPLICADA
+            - PRESTAMO_YA_DEVUELTO
+            - ISBN_DUPLICADO
+            - EMAIL_DUPLICADO
+            - CUPO_INVALIDO
+            - TITULO_CON_HISTORIAL
+            - USUARIO_CON_HISTORIAL
+            - INTERNO
+          description: Código estable y legible por máquina (el `message` puede cambiar)
         message: { type: string }
         correlationId: { type: string }
+
+    # --- Contratos fuera de HTTP (documentados aquí para tener un único lugar) ---
+
+    EventoPrestamoCreado:
+      description: |
+        Mensaje publicado en RabbitMQ (exchange `biblioteca.eventos`, routing key `prestamo.creado`).
+        `eventId` permite al worker descartar re-entregas.
+      type: object
+      required: [eventId, type, occurredAt, correlationId, data]
+      properties:
+        eventId: { type: string, format: uuid }
+        type: { type: string, const: prestamo.creado }
+        occurredAt: { type: string, format: date-time }
+        correlationId: { type: string }
+        data: { $ref: '#/components/schemas/Prestamo' }
+      examples:
+        - eventId: 1b4e28ba-2fa1-41d2-883f-0016d3cca427
+          type: prestamo.creado
+          occurredAt: '2026-09-28T10:00:00Z'
+          correlationId: 7f3c2a1e-5b6d-4c1a-9a55-0e6a2b7d9f10
+          data:
+            id: 3
+            usuarioId: 2
+            tituloId: 1
+            fechaPrestamo: '2026-09-28T10:00:00Z'
+            fechaVencimiento: '2026-10-12T10:00:00Z'
+            fechaDevolucion: null
+            estado: ACTIVO
+
+    MensajeListaEspera:
+      description: Mensaje que la API envía por el WebSocket `/ws/lista-espera` cuando hay cupo reservado
+      type: object
+      required: [type, reservaId, usuarioId, tituloId]
+      properties:
+        type: { type: string, const: cupo.disponible }
+        reservaId: { type: integer, format: int64 }
+        usuarioId: { type: integer, format: int64 }
+        tituloId: { type: integer, format: int64 }
+        titulo: { type: string }
+        mensaje: { type: string }
+      examples:
+        - type: cupo.disponible
+          reservaId: 1
+          usuarioId: 2
+          tituloId: 3
+          titulo: El Aleph
+          mensaje: Hay un ejemplar de "El Aleph" reservado para vos

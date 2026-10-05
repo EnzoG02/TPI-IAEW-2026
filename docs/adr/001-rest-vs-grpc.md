@@ -8,6 +8,7 @@ La API expone operaciones CRUD y un flujo de préstamo consumidos por clientes w
 
 ## Decisión
 Se usa **REST/JSON sobre HTTP** como estilo principal, con contrato en `api/openapi.yaml`. gRPC no se usa en la API principal.
+Las convenciones del contrato (nombres, códigos HTTP, errores, paginación) se fijan en el [ADR 006](006-estilo-api.md).
 
 ## Alternativas consideradas
 - **gRPC:** eficiente y fuertemente tipado, pero requiere generación de stubs, no es amigable desde navegador/Postman y no es lo pedido como API principal.

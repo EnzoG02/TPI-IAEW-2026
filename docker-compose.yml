@@ -44,13 +44,22 @@ services:
         condition: service_healthy
       broker:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
 
   worker:
     build: ./services/worker
     env_file: .env
     depends_on:
+      db:
+        condition: service_healthy   # registra avisos y multas en la base
       broker:
         condition: service_healthy
+
+  # Observabilidad (Prometheus + Grafana) se agrega en la Entrega 2; ver docs/c4/02-container.md
 
 volumes:
   pgdata:

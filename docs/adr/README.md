@@ -7,3 +7,4 @@
 | [003](003-seguridad-oauth2-jwt-auth0.md) | OAuth 2.0 client_credentials + JWT (Auth0) y scopes |
 | [004](004-broker-rabbitmq.md) | RabbitMQ para eventos `prestamo.creado` |
 | [005](005-integracion-websocket.md) | WebSocket para lista de espera |
+| [006](006-estilo-api.md) | Estilo y convenciones de la API (recursos, códigos HTTP, errores, paginación) |
