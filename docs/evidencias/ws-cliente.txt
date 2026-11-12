@@ -1,0 +1,5 @@
+# Salida de scripts/ws-client.js (usuario 2, Bruno) con Auth0 real, 2026-11-12.
+# Mientras estaba suscripto, en otra terminal: POST /prestamos/1/devolucion con X-Correlation-Id: evidencia-ws-0001
+[ws] conectado a ws://api:3000/ws/lista-espera?usuarioId=2
+[ws] 2026-11-12T15:46:59.294Z {"type":"suscripcion.ok","usuarioId":2}
+[ws] 2026-11-12T15:47:07.671Z {"type":"cupo.disponible","reservaId":1,"usuarioId":2,"tituloId":3,"titulo":"El Aleph","mensaje":"Hay un ejemplar de \"El Aleph\" reservado para vos","correlationId":"evidencia-ws-0001"}
