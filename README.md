@@ -382,5 +382,5 @@ dashboard, Auth0, RabbitMQ y la demo del WebSocket. Guion de la demo: [docs/demo
 ## Entrega: tag y hash
 
 - **Tag/release:** `v1.0.0` (`git checkout v1.0.0`). El tag de la Entrega 1 se renombró a `entrega-1`.
-- **Hash del commit entregado:** `COMPLETAR_AL_ETIQUETAR` (el tag `v1.0.0` apunta al commit siguiente, que solo agrega este hash al README).
+- **Hash del commit entregado:** `65b0d934f586f46d830ce186d39d4a180a1bdf86` (el tag `v1.0.0` apunta al commit siguiente, que solo agrega este hash al README).
 - **Archivo `.zip`:** generado desde el tag (`git archive --format=zip -o TPI-IAEW-2026-v1.0.0.zip v1.0.0`) y subido a UV/Moodle.
