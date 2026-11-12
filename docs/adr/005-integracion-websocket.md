@@ -21,6 +21,18 @@ La API expone `GET /ws/lista-espera?usuarioId={id}` (WebSocket, librería `ws`),
 - **Usuario desconectado:** la reserva queda igual en `NOTIFICADA`; el usuario la ve con `GET /reservas` y puede
   tomar el préstamo.
 
+## Implementación (Entrega 2)
+- `services/api/src/ws/listaEspera.js`: `WebSocketServer` en modo `noServer` sobre el mismo servidor HTTP de la API
+  (puerto 3000). El evento `upgrade` valida ruta, `usuarioId` y token **antes** de aceptar la conexión; si algo falla
+  responde el handshake con 404, 400, 401 o 403 y cierra el socket.
+- El token se verifica con `jose` (`createRemoteJWKSet` + `jwtVerify`) usando el issuer y el `jwks_uri` del discovery
+  de Auth0, y se exige el scope `read:prestamos`.
+- Mensajes JSON: `suscripcion.ok` al conectarse y `cupo.disponible` (schema `MensajeListaEspera`) al liberarse cupo,
+  con el `correlationId` del request de devolución que lo originó.
+- Heartbeat con ping/pong cada 30 s para cerrar conexiones muertas; `maxPayload` de 4 KB.
+- Cliente de demo: `docker compose run --rm tools node scripts/ws-client.js <usuarioId>` (pide el token con
+  `client_credentials` y muestra cada mensaje recibido).
+
 ## Alternativas consideradas
 - **Webhook firmado a mailing simulado:** más simple, pero menos visual en la demo.
 - **gRPC a catálogo externo:** requiere un servicio adicional.

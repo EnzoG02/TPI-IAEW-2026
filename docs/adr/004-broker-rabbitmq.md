@@ -7,14 +7,24 @@
 Al crearse un préstamo deben gestionarse vencimientos, multas y avisos de devolución sin bloquear la respuesta HTTP.
 
 ## Decisión
-Se usa **RabbitMQ**. La API (productor) publica `prestamo.creado` en un exchange; el worker (consumidor) lo procesa desde una cola durable, con ack manual y reintentos. Efecto visible: filas en la tabla `avisos` y logs del worker.
+Se usa **RabbitMQ**. La API (productor) publica `prestamo.creado` en un exchange; el worker (consumidor) lo procesa desde una cola durable, con ack manual y reintentos. Efecto visible: el aviso `PRESTAMO_CONFIRMADO` en `GET /avisos?prestamoId={id}`, en la tabla `avisos` y en los logs del worker (con el mismo correlation ID del request).
 
 | Elemento | Valor |
 |---|---|
 | Exchange | `biblioteca.eventos` (topic, durable) |
 | Routing key | `prestamo.creado` |
-| Cola | `worker.prestamos` (durable) → tras 3 reintentos fallidos pasa a `worker.prestamos.dlq` |
+| Cola | `worker.prestamos` (durable, `prefetch(1)`, ack manual) |
+| Reintentos | exchange `biblioteca.eventos.retry` → cola `worker.prestamos.retry`; el mensaje espera `RETRY_DELAY_MS` (TTL por mensaje, `expiration`) y vuelve por dead-letter a `biblioteca.eventos` |
+| DLQ | exchange `biblioteca.eventos.dlx` → cola `worker.prestamos.dlq`, después de `MAX_RETRIES` (3) intentos o ante un error permanente |
 | Payload | schema `EventoPrestamoCreado` en `api/openapi.yaml` (`eventId`, `occurredAt`, `correlationId`, `data`) |
+| Headers | `x-correlation-id`, `traceparent` (la traza sigue de la API al worker) y `x-retry-count` |
+
+La topología se adaptó del laboratorio de la clase 07. Diferencia: el TTL del reintento va en cada mensaje y no como
+argumento de la cola, para poder cambiar `RETRY_DELAY_MS` sin que RabbitMQ rechace la redeclaración (error 406).
+
+**Errores permanentes vs. transitorios:** un mensaje que no cumple el contrato o un préstamo inexistente va directo a
+la DLQ; un error de base de datos se reintenta. Para la demo, `SIMULATE_TRANSIENT_FAILURES=N` hace fallar los primeros
+N intentos de cada evento (con N ≤ 3 se recupera; con N > 3 termina en la DLQ).
 
 **Qué hace el worker**
 - Al recibir `prestamo.creado`: registra el aviso `PRESTAMO_CONFIRMADO` (canal `LOG`).
@@ -28,7 +38,9 @@ veces el mismo evento no duplique registros (`INSERT ... ON CONFLICT DO NOTHING`
 
 **Publicación después del commit:** la API publica el evento después de confirmar la transacción del préstamo,
 así nunca se anuncia un préstamo que no existe. Si RabbitMQ no está disponible en ese momento, el préstamo queda
-creado y se registra el error en el log; la solución completa (patrón *transactional outbox*) queda como mejora.
+creado y se registra el error en el log (`evento.publicacion_fallida`); la API se reconecta sola en la siguiente
+publicación. La solución completa (patrón *transactional outbox*) queda como mejora. Se publica con *publisher
+confirms*: el request no termina hasta que el broker confirma el mensaje.
 
 ## Alternativas consideradas
 - **Kafka:** excelente para streaming y volumen alto; excesivo para este caso.
