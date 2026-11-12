@@ -1,0 +1,45 @@
+# Override SOLO para pruebas automatizadas y CI: reemplaza Auth0 por un emisor JWT local
+# (tools/issuer-local). La demo y la entrega usan Auth0 real (docs/auth0.md).
+#
+#   docker compose -f docker-compose.yml -f compose.local-auth.yaml up -d --build --wait
+#
+# Clientes del emisor local: local-cliente (todos los scopes) y local-lector (solo read:*),
+# ambos con client_secret "local-secret". Token: POST http://localhost:8081/oauth/token
+services:
+  issuer:
+    image: node:22.17.0-bookworm-slim
+    command: ["node", "/issuer/issuer.js"]
+    environment:
+      ISSUER: http://issuer:8080/
+      AUDIENCE: ${AUTH0_AUDIENCE}
+    volumes:
+      - ./tools/issuer-local:/issuer:ro
+    ports:
+      - "8081:8080"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:8080/.well-known/jwks.json').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  api:
+    environment:
+      AUTH0_ISSUER_BASE_URL: http://issuer:8080/
+    depends_on:
+      issuer:
+        condition: service_healthy
+
+  tools:
+    environment:
+      TOKEN_URL: http://issuer:8080/oauth/token
+      AUTH0_CLIENT_ID: local-cliente
+      AUTH0_CLIENT_SECRET: local-secret
+
+  newman:
+    environment:
+      NEWMAN_ENV: local-auth.postman_environment.json
+      TOKEN_URL: http://issuer:8080/oauth/token
+      AUTH0_CLIENT_ID: local-cliente
+      AUTH0_CLIENT_SECRET: local-secret
+      AUTH0_LECTOR_CLIENT_ID: local-lector
+      AUTH0_LECTOR_CLIENT_SECRET: local-secret

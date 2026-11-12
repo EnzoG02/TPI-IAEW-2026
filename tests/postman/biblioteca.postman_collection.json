@@ -1,0 +1,1704 @@
+{
+  "info": {
+    "name": "Biblioteca digital · TPI IAEW",
+    "description": "Colección de pruebas de la API. Correr completa y en orden (Runner de Postman o Newman).\nVariables: elegir el environment de Auth0 (completar clientId/clientSecret) o el del emisor local.\nCada corrida crea sus propios datos (runId), así que se puede repetir sin resetear la base.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{accessToken}}",
+        "type": "string"
+      }
+    ]
+  },
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// Obtiene (o renueva si vence en < 60 s) los tokens M2M con client_credentials.",
+          "// Un token por corrida: respeta la cuota de tokens del plan gratuito de Auth0.",
+          "const ahora = Math.floor(Date.now() / 1000);",
+          "function asegurarToken(prefijo, clientIdVar, secretVar) {",
+          "  const token = pm.collectionVariables.get(prefijo + 'Token');",
+          "  const exp = Number(pm.collectionVariables.get(prefijo + 'TokenExp') || 0);",
+          "  const clientId = pm.variables.get(clientIdVar);",
+          "  if ((token && exp - ahora > 60) || !clientId) return;",
+          "  pm.sendRequest({",
+          "    url: pm.variables.get('tokenUrl'), method: 'POST',",
+          "    header: { 'Content-Type': 'application/json' },",
+          "    body: { mode: 'raw', raw: JSON.stringify({ grant_type: 'client_credentials', client_id: clientId,",
+          "      client_secret: pm.variables.get(secretVar), audience: pm.variables.get('audience') }) }",
+          "  }, (err, res) => {",
+          "    if (err || res.code !== 200) { console.error('No se obtuvo token ' + prefijo, err || res.text()); return; }",
+          "    const body = res.json();",
+          "    pm.collectionVariables.set(prefijo + 'Token', body.access_token);",
+          "    pm.collectionVariables.set(prefijo + 'TokenExp', ahora + body.expires_in);",
+          "  });",
+          "}",
+          "asegurarToken('access', 'clientId', 'clientSecret');",
+          "asegurarToken('lector', 'lectorClientId', 'lectorClientSecret');",
+          "if (!pm.collectionVariables.get('runId')) pm.collectionVariables.set('runId', Date.now().toString(36));"
+        ]
+      }
+    }
+  ],
+  "variable": [
+    {
+      "key": "runId",
+      "value": ""
+    },
+    {
+      "key": "poll",
+      "value": ""
+    },
+    {
+      "key": "accessToken",
+      "value": ""
+    },
+    {
+      "key": "accessTokenExp",
+      "value": ""
+    },
+    {
+      "key": "lectorToken",
+      "value": ""
+    },
+    {
+      "key": "lectorTokenExp",
+      "value": ""
+    },
+    {
+      "key": "tituloCrudId",
+      "value": ""
+    },
+    {
+      "key": "usuarioCrudId",
+      "value": ""
+    },
+    {
+      "key": "tituloId",
+      "value": ""
+    },
+    {
+      "key": "lectorA",
+      "value": ""
+    },
+    {
+      "key": "lectorB",
+      "value": ""
+    },
+    {
+      "key": "lectorBloqueado",
+      "value": ""
+    },
+    {
+      "key": "prestamoId",
+      "value": ""
+    }
+  ],
+  "item": [
+    {
+      "name": "00 Preparación",
+      "description": "Healthcheck y obtención de tokens M2M.",
+      "item": [
+        {
+          "name": "Health (público)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/health",
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set('runId', Date.now().toString(36));",
+                  "pm.collectionVariables.set('poll', 0);"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"status ok\", () => pm.expect(pm.response.json().status).to.eql(\"ok\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Obtener token cliente (client_credentials)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{tokenUrl}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"grant_type\": \"client_credentials\",\n  \"client_id\": \"{{clientId}}\",\n  \"client_secret\": \"{{clientSecret}}\",\n  \"audience\": \"{{audience}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "noauth"
+            },
+            "description": "Flujo OAuth 2.0 client_credentials contra Auth0 (o el emisor local en CI). El token se guarda en accessToken."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                  "const b = pm.response.json();",
+                  "pm.test(\"token Bearer con scopes de escritura\", () => { pm.expect(b.token_type).to.eql(\"Bearer\"); pm.expect(b.scope).to.include(\"write:prestamos\"); });",
+                  "pm.collectionVariables.set('accessToken', b.access_token);",
+                  "pm.collectionVariables.set('accessTokenExp', Math.floor(Date.now()/1000) + b.expires_in);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Obtener token lector (solo read:*)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{tokenUrl}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"grant_type\": \"client_credentials\",\n  \"client_id\": \"{{lectorClientId}}\",\n  \"client_secret\": \"{{lectorClientSecret}}\",\n  \"audience\": \"{{audience}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                  "const b = pm.response.json();",
+                  "pm.test(\"sin scopes de escritura\", () => pm.expect(b.scope).to.not.include(\"write:\"));",
+                  "pm.collectionVariables.set('lectorToken', b.access_token);",
+                  "pm.collectionVariables.set('lectorTokenExp', Math.floor(Date.now()/1000) + b.expires_in);"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "01 Seguridad (OAuth 2.0, scopes y x-api-key)",
+      "description": "Validación del JWT (firma, iss, aud, exp), autorización por scope y endpoint de comparación con x-api-key.",
+      "item": [
+        {
+          "name": "Sin token → 401",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/titulos",
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 401\", () => pm.response.to.have.status(401));",
+                  "pm.test(\"code NO_AUTENTICADO\", () => pm.expect(pm.response.json().code).to.eql(\"NO_AUTENTICADO\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Token con firma inválida → 401",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/titulos",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "eyJhbGciOiJSUzI1NiJ9.e30.firma-invalida",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 401\", () => pm.response.to.have.status(401));",
+                  "pm.test(\"code NO_AUTENTICADO\", () => pm.expect(pm.response.json().code).to.eql(\"NO_AUTENTICADO\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Lector puede leer títulos → 200",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/titulos",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{lectorToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Lector intenta crear título → 403 (falta write:titulos)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/titulos",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"titulo\": \"No autorizado\",\n  \"autor\": \"Nadie\",\n  \"cupoTotal\": 1\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{lectorToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 403\", () => pm.response.to.have.status(403));",
+                  "pm.test(\"code SIN_PERMISO\", () => pm.expect(pm.response.json().code).to.eql(\"SIN_PERMISO\"));",
+                  "pm.test(\"indica el scope requerido\", () => pm.expect(pm.response.json().message).to.include(\"write:titulos\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Lector intenta prestar → 403 (falta write:prestamos)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/prestamos",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"usuarioId\": 2,\n  \"tituloId\": 1\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{lectorToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 403\", () => pm.response.to.have.status(403));",
+                  "pm.test(\"code SIN_PERMISO\", () => pm.expect(pm.response.json().code).to.eql(\"SIN_PERMISO\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "x-api-key válida → 200",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}"
+              }
+            ],
+            "url": "{{baseUrl}}/status/api-key",
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "x-api-key inválida → 401",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "clave-incorrecta"
+              }
+            ],
+            "url": "{{baseUrl}}/status/api-key",
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 401\", () => pm.response.to.have.status(401));",
+                  "pm.test(\"code NO_AUTENTICADO\", () => pm.expect(pm.response.json().code).to.eql(\"NO_AUTENTICADO\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Correlation ID propagado",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-Correlation-Id",
+                "value": "postman-{{runId}}"
+              }
+            ],
+            "url": "{{baseUrl}}/titulos?pageSize=1"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"devuelve el mismo X-Correlation-Id\", () => pm.expect(pm.response.headers.get(\"X-Correlation-Id\")).to.eql(\"postman-\" + pm.collectionVariables.get(\"runId\")));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "02 CRUD Títulos",
+      "description": "CRUD completo de la entidad Titulo.",
+      "item": [
+        {
+          "name": "Crear título → 201",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/titulos",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"titulo\": \"Título Postman {{runId}}\",\n  \"autor\": \"Autor Postman\",\n  \"isbn\": \"PM-{{runId}}\",\n  \"cupoTotal\": 2\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 201\", () => pm.response.to.have.status(201));",
+                  "const b = pm.response.json();",
+                  "pm.test(\"cupoDisponible = cupoTotal\", () => pm.expect(b.cupoDisponible).to.eql(2));",
+                  "pm.test(\"header Location\", () => pm.expect(pm.response.headers.get(\"Location\")).to.eql(\"/titulos/\" + b.id));",
+                  "pm.collectionVariables.set('tituloCrudId', b.id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Obtener título → 200",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/titulos/{{tituloCrudId}}"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"mismo id\", () => pm.expect(pm.response.json().id).to.eql(Number(pm.collectionVariables.get(\"tituloCrudId\"))));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Listar títulos filtrando por autor → 200",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/titulos?autor=Postman&soloDisponibles=true&page=1&pageSize=5"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                  "const b = pm.response.json();",
+                  "pm.test(\"respuesta paginada\", () => { pm.expect(b).to.have.keys(\"data\",\"page\",\"pageSize\",\"total\"); pm.expect(b.pageSize).to.eql(5); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Actualizar título → 200",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/titulos/{{tituloCrudId}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"titulo\": \"Título Postman {{runId}} (2da ed.)\",\n  \"autor\": \"Autor Postman\",\n  \"isbn\": \"PM-{{runId}}\",\n  \"cupoTotal\": 3\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"recalcula cupoDisponible\", () => pm.expect(pm.response.json().cupoDisponible).to.eql(3));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Crear título inválido → 400",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/titulos",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"titulo\": \"\",\n  \"autor\": \"X\",\n  \"cupoTotal\": 0\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 400\", () => pm.response.to.have.status(400));",
+                  "pm.test(\"code VALIDACION\", () => pm.expect(pm.response.json().code).to.eql(\"VALIDACION\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Crear título con ISBN repetido → 409",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/titulos",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"titulo\": \"Duplicado\",\n  \"autor\": \"X\",\n  \"isbn\": \"PM-{{runId}}\",\n  \"cupoTotal\": 1\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 409\", () => pm.response.to.have.status(409));",
+                  "pm.test(\"code ISBN_DUPLICADO\", () => pm.expect(pm.response.json().code).to.eql(\"ISBN_DUPLICADO\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Eliminar título → 204",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": "{{baseUrl}}/titulos/{{tituloCrudId}}"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 204\", () => pm.response.to.have.status(204));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Obtener título eliminado → 404",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/titulos/{{tituloCrudId}}"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 404\", () => pm.response.to.have.status(404));",
+                  "pm.test(\"code TITULO_NO_ENCONTRADO\", () => pm.expect(pm.response.json().code).to.eql(\"TITULO_NO_ENCONTRADO\"));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "03 CRUD Usuarios",
+      "description": "CRUD completo de la entidad Usuario.",
+      "item": [
+        {
+          "name": "Crear usuario → 201",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/usuarios",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"nombre\": \"Usuario Postman\",\n  \"email\": \"postman-{{runId}}@example.com\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 201\", () => pm.response.to.have.status(201));",
+                  "const b = pm.response.json();",
+                  "pm.test(\"habilitado por defecto\", () => pm.expect(b.estado).to.eql(\"HABILITADO\"));",
+                  "pm.collectionVariables.set('usuarioCrudId', b.id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Obtener usuario → 200",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/usuarios/{{usuarioCrudId}}"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Listar usuarios habilitados → 200",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/usuarios?estado=HABILITADO"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"todos habilitados\", () => pm.response.json().data.forEach(u => pm.expect(u.estado).to.eql(\"HABILITADO\")));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Bloquear usuario (PUT) → 200",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/usuarios/{{usuarioCrudId}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"nombre\": \"Usuario Postman\",\n  \"email\": \"postman-{{runId}}@example.com\",\n  \"estado\": \"BLOQUEADO\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"queda BLOQUEADO\", () => pm.expect(pm.response.json().estado).to.eql(\"BLOQUEADO\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Crear usuario con email repetido → 409",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/usuarios",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"nombre\": \"Repetido\",\n  \"email\": \"postman-{{runId}}@example.com\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 409\", () => pm.response.to.have.status(409));",
+                  "pm.test(\"code EMAIL_DUPLICADO\", () => pm.expect(pm.response.json().code).to.eql(\"EMAIL_DUPLICADO\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Crear usuario con email inválido → 400",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/usuarios",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"nombre\": \"X\",\n  \"email\": \"no-es-un-email\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 400\", () => pm.response.to.have.status(400));",
+                  "pm.test(\"code VALIDACION\", () => pm.expect(pm.response.json().code).to.eql(\"VALIDACION\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Eliminar usuario sin historial → 204",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": "{{baseUrl}}/usuarios/{{usuarioCrudId}}"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 204\", () => pm.response.to.have.status(204));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Obtener usuario eliminado → 404",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/usuarios/{{usuarioCrudId}}"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 404\", () => pm.response.to.have.status(404));",
+                  "pm.test(\"code USUARIO_NO_ENCONTRADO\", () => pm.expect(pm.response.json().code).to.eql(\"USUARIO_NO_ENCONTRADO\"));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "04 Préstamo multi-paso, asincronía y lista de espera",
+      "description": "Flujo de negocio completo con datos propios de la corrida (se puede repetir sin resetear la base).",
+      "item": [
+        {
+          "name": "Preparar: título con 1 cupo",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/titulos",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"titulo\": \"Cupo único {{runId}}\",\n  \"autor\": \"Autor Postman\",\n  \"cupoTotal\": 1\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 201\", () => pm.response.to.have.status(201));",
+                  "pm.collectionVariables.set('tituloId', pm.response.json().id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Preparar: usuario Lucia",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/usuarios",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"nombre\": \"Lucia Postman\",\n  \"email\": \"lucia-{{runId}}@example.com\",\n  \"estado\": \"HABILITADO\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 201\", () => pm.response.to.have.status(201));",
+                  "pm.collectionVariables.set('lectorA', pm.response.json().id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Preparar: usuario Mateo",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/usuarios",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"nombre\": \"Mateo Postman\",\n  \"email\": \"mateo-{{runId}}@example.com\",\n  \"estado\": \"HABILITADO\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 201\", () => pm.response.to.have.status(201));",
+                  "pm.collectionVariables.set('lectorB', pm.response.json().id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Preparar: usuario Bloqueado",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/usuarios",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"nombre\": \"Bloqueado Postman\",\n  \"email\": \"bloqueado-{{runId}}@example.com\",\n  \"estado\": \"BLOQUEADO\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 201\", () => pm.response.to.have.status(201));",
+                  "pm.collectionVariables.set('lectorBloqueado', pm.response.json().id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Prestar → 201 (transacción multi-paso)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Correlation-Id",
+                "value": "postman-prestamo-{{runId}}"
+              }
+            ],
+            "url": "{{baseUrl}}/prestamos",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"usuarioId\": {{lectorA}},\n  \"tituloId\": {{tituloId}},\n  \"diasPrestamo\": 7\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 201\", () => pm.response.to.have.status(201));",
+                  "const b = pm.response.json();",
+                  "pm.test(\"estado ACTIVO y vencimiento calculado\", () => { pm.expect(b.estado).to.eql(\"ACTIVO\"); pm.expect(new Date(b.fechaVencimiento) > new Date(b.fechaPrestamo)).to.be.true; });",
+                  "pm.collectionVariables.set('prestamoId', b.id);",
+                  "pm.collectionVariables.set('poll', 0);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Cupo descontado → cupoDisponible 0",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/titulos/{{tituloId}}"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"cupoDisponible 0\", () => pm.expect(pm.response.json().cupoDisponible).to.eql(0));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Asincronía: aviso PRESTAMO_CONFIRMADO del worker (polling)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/avisos?prestamoId={{prestamoId}}",
+            "description": "El worker consume prestamo.creado desde RabbitMQ y registra el aviso. Se reintenta hasta 10 veces."
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "setTimeout(() => {}, 500); // da tiempo al worker"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const avisos = pm.response.json().data || [];",
+                  "const ok = avisos.some(a => a.tipo === 'PRESTAMO_CONFIRMADO');",
+                  "const intento = Number(pm.collectionVariables.get('poll') || 0);",
+                  "if (!ok && intento < 10) {",
+                  "  pm.collectionVariables.set('poll', intento + 1);",
+                  "  pm.execution.setNextRequest(pm.info.requestName);",
+                  "} else {",
+                  "  pm.test('el worker registró PRESTAMO_CONFIRMADO', () => pm.expect(ok).to.be.true);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Mismo usuario y título → 409 PRESTAMO_DUPLICADO",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/prestamos",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"usuarioId\": {{lectorA}},\n  \"tituloId\": {{tituloId}}\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 409\", () => pm.response.to.have.status(409));",
+                  "pm.test(\"code PRESTAMO_DUPLICADO\", () => pm.expect(pm.response.json().code).to.eql(\"PRESTAMO_DUPLICADO\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Otro usuario sin cupo → 409 CUPO_AGOTADO",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/prestamos",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"usuarioId\": {{lectorB}},\n  \"tituloId\": {{tituloId}}\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 409\", () => pm.response.to.have.status(409));",
+                  "pm.test(\"code CUPO_AGOTADO\", () => pm.expect(pm.response.json().code).to.eql(\"CUPO_AGOTADO\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Sin cupo y unirseListaEspera → 202 reserva",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/prestamos",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"usuarioId\": {{lectorB}},\n  \"tituloId\": {{tituloId}},\n  \"unirseListaEspera\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 202\", () => pm.response.to.have.status(202));",
+                  "const b = pm.response.json();",
+                  "pm.test(\"reserva EN_ESPERA en posición 1\", () => { pm.expect(b.estado).to.eql(\"EN_ESPERA\"); pm.expect(b.posicion).to.eql(1); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Unirse dos veces → 409 RESERVA_DUPLICADA",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/prestamos",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"usuarioId\": {{lectorB}},\n  \"tituloId\": {{tituloId}},\n  \"unirseListaEspera\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 409\", () => pm.response.to.have.status(409));",
+                  "pm.test(\"code RESERVA_DUPLICADA\", () => pm.expect(pm.response.json().code).to.eql(\"RESERVA_DUPLICADA\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Usuario bloqueado → 403 USUARIO_BLOQUEADO",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/prestamos",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"usuarioId\": {{lectorBloqueado}},\n  \"tituloId\": {{tituloId}}\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 403\", () => pm.response.to.have.status(403));",
+                  "pm.test(\"code USUARIO_BLOQUEADO\", () => pm.expect(pm.response.json().code).to.eql(\"USUARIO_BLOQUEADO\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Usuario con préstamos vencidos (Diego, seed) → 403 PRESTAMOS_VENCIDOS",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/prestamos",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"usuarioId\": 4,\n  \"tituloId\": 1\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 403\", () => pm.response.to.have.status(403));",
+                  "pm.test(\"code PRESTAMOS_VENCIDOS\", () => pm.expect(pm.response.json().code).to.eql(\"PRESTAMOS_VENCIDOS\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Título inexistente → 404",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/prestamos",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"usuarioId\": 2,\n  \"tituloId\": 999999\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 404\", () => pm.response.to.have.status(404));",
+                  "pm.test(\"code TITULO_NO_ENCONTRADO\", () => pm.expect(pm.response.json().code).to.eql(\"TITULO_NO_ENCONTRADO\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Usuario inexistente → 404",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/prestamos",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"usuarioId\": 999999,\n  \"tituloId\": 1\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 404\", () => pm.response.to.have.status(404));",
+                  "pm.test(\"code USUARIO_NO_ENCONTRADO\", () => pm.expect(pm.response.json().code).to.eql(\"USUARIO_NO_ENCONTRADO\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "diasPrestamo fuera de rango → 400",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/prestamos",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"usuarioId\": 2,\n  \"tituloId\": 1,\n  \"diasPrestamo\": 90\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 400\", () => pm.response.to.have.status(400));",
+                  "pm.test(\"code VALIDACION\", () => pm.expect(pm.response.json().code).to.eql(\"VALIDACION\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Devolver → 200 (notifica a la lista de espera por WebSocket)",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": "{{baseUrl}}/prestamos/{{prestamoId}}/devolucion"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"DEVUELTO con fecha\", () => { const b = pm.response.json(); pm.expect(b.estado).to.eql(\"DEVUELTO\"); pm.expect(b.fechaDevolucion).to.be.a(\"string\"); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Devolver otra vez → 409 PRESTAMO_YA_DEVUELTO",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": "{{baseUrl}}/prestamos/{{prestamoId}}/devolucion"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 409\", () => pm.response.to.have.status(409));",
+                  "pm.test(\"code PRESTAMO_YA_DEVUELTO\", () => pm.expect(pm.response.json().code).to.eql(\"PRESTAMO_YA_DEVUELTO\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Reserva pasó a NOTIFICADA",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/reservas?tituloId={{tituloId}}"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"primera reserva NOTIFICADA\", () => { const r = pm.response.json()[0]; pm.expect(r.estado).to.eql(\"NOTIFICADA\"); pm.expect(r.notificadaAt).to.be.a(\"string\"); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Aviso CUPO_DISPONIBLE registrado",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/avisos?usuarioId={{lectorB}}&tipo=CUPO_DISPONIBLE"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"un aviso por WebSocket\", () => { const a = pm.response.json().data; pm.expect(a.length).to.eql(1); pm.expect(a[0].canal).to.eql(\"WEBSOCKET\"); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "El cupo está guardado: otro usuario → 409 CUPO_AGOTADO",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/prestamos",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"usuarioId\": {{lectorA}},\n  \"tituloId\": {{tituloId}}\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 409\", () => pm.response.to.have.status(409));",
+                  "pm.test(\"code CUPO_AGOTADO\", () => pm.expect(pm.response.json().code).to.eql(\"CUPO_AGOTADO\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "El notificado toma el cupo → 201",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/prestamos",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"usuarioId\": {{lectorB}},\n  \"tituloId\": {{tituloId}}\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 201\", () => pm.response.to.have.status(201));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Reserva CUMPLIDA",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/reservas?tituloId={{tituloId}}"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"reserva CUMPLIDA\", () => pm.expect(pm.response.json()[0].estado).to.eql(\"CUMPLIDA\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Eliminar título con historial → 409",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": "{{baseUrl}}/titulos/{{tituloId}}"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 409\", () => pm.response.to.have.status(409));",
+                  "pm.test(\"code TITULO_CON_HISTORIAL\", () => pm.expect(pm.response.json().code).to.eql(\"TITULO_CON_HISTORIAL\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Eliminar usuario con historial → 409",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": "{{baseUrl}}/usuarios/{{lectorA}}"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 409\", () => pm.response.to.have.status(409));",
+                  "pm.test(\"code USUARIO_CON_HISTORIAL\", () => pm.expect(pm.response.json().code).to.eql(\"USUARIO_CON_HISTORIAL\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Listar préstamos del usuario → 200",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/prestamos?usuarioId={{lectorB}}&estado=ACTIVO"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"un préstamo activo\", () => pm.expect(pm.response.json().total).to.eql(1));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

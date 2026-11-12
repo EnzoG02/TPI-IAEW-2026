@@ -1,5 +1,17 @@
 name: biblioteca-digital
 
+# Variables compartidas por los servicios Node (API, migrate, worker, tools).
+x-otel: &otel
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-lgtm:4318
+  OTEL_TRACES_SAMPLER: always_on
+
+x-api-image: &api-image
+  build:
+    context: .
+    dockerfile: services/api/Dockerfile
+  image: biblioteca-api:local
+  init: true
+
 services:
   db:
     image: postgres:16-alpine
@@ -11,14 +23,11 @@ services:
       - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
-      # Migración + seed: se ejecutan solo la primera vez (volumen vacío)
-      - ./db/migrations/001_init.sql:/docker-entrypoint-initdb.d/01_init.sql:ro
-      - ./db/seed.sql:/docker-entrypoint-initdb.d/02_seed.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 5s
       timeout: 3s
-      retries: 10
+      retries: 20
 
   broker:
     image: rabbitmq:3.13-management-alpine
@@ -32,34 +41,129 @@ services:
       test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
       interval: 10s
       timeout: 5s
-      retries: 10
+      retries: 12
+
+  # Grafana + Prometheus + Loki + Tempo + OpenTelemetry Collector en una imagen (ADR 007).
+  otel-lgtm:
+    image: grafana/otel-lgtm:0.35.0
+    ports:
+      - "3001:3000"     # Grafana
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+    volumes:
+      - lgtm-data:/data
+      - ./observabilidad/prometheus.yaml:/otel-lgtm/prometheus.yaml:ro
+      - ./observabilidad/datasources.yaml:/otel-lgtm/grafana/conf/provisioning/datasources/grafana-datasources.yaml:ro
+      - ./observabilidad/dashboard-provider.yaml:/otel-lgtm/grafana/conf/provisioning/dashboards/biblioteca.yaml:ro
+      - ./observabilidad/dashboard.json:/otel-lgtm/grafana/conf/provisioning/dashboards/custom/biblioteca.json:ro
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:3000/api/health && curl -fsS http://localhost:9090/-/ready"]
+      interval: 5s
+      timeout: 5s
+      retries: 60
+      start_period: 15s
+
+  # Migraciones versionadas + seed idempotente (ADR 002). Termina y la API arranca después.
+  migrate:
+    <<: *api-image
+    command: ["sh", "-c", "node scripts/migrate.js && node scripts/seed.js"]
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
 
   api:
-    build: ./services/api
-    env_file: .env
+    <<: *api-image
+    environment:
+      <<: *otel
+      OTEL_SERVICE_NAME: biblioteca-api
+      DATABASE_URL: ${DATABASE_URL}
+      RABBITMQ_URL: ${RABBITMQ_URL}
+      AUTH0_DOMAIN: ${AUTH0_DOMAIN}
+      AUTH0_AUDIENCE: ${AUTH0_AUDIENCE}
+      AUTH0_ISSUER_BASE_URL: ${AUTH0_ISSUER_BASE_URL:-}
+      API_KEY: ${API_KEY}
     ports:
       - "${API_PORT:-3000}:3000"
     depends_on:
-      db:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
       broker:
         condition: service_healthy
+      otel-lgtm:
+        condition: service_started
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:3000/health"]
-      interval: 10s
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 5s
       timeout: 3s
-      retries: 5
+      retries: 20
+    restart: unless-stopped
 
   worker:
     build: ./services/worker
-    env_file: .env
+    image: biblioteca-worker:local
+    init: true
+    environment:
+      <<: *otel
+      OTEL_SERVICE_NAME: biblioteca-worker
+      DATABASE_URL: ${DATABASE_URL}
+      RABBITMQ_URL: ${RABBITMQ_URL}
+      MAX_RETRIES: ${MAX_RETRIES:-3}
+      RETRY_DELAY_MS: ${RETRY_DELAY_MS:-5000}
+      SIMULATE_TRANSIENT_FAILURES: ${SIMULATE_TRANSIENT_FAILURES:-0}
+      VENCIMIENTOS_INTERVAL_MS: ${VENCIMIENTOS_INTERVAL_MS:-60000}
+      MULTA_MONTO: ${MULTA_MONTO:-500}
     depends_on:
-      db:
-        condition: service_healthy   # registra avisos y multas en la base
+      migrate:
+        condition: service_completed_successfully
       broker:
         condition: service_healthy
+      otel-lgtm:
+        condition: service_started
+    restart: unless-stopped
 
-  # Observabilidad (Prometheus + Grafana) se agrega en la Entrega 2; ver docs/c4/02-container.md
+  # Herramientas de demo (perfil tools): cliente WebSocket y reset de la base.
+  #   docker compose run --rm tools node scripts/ws-client.js 2
+  #   docker compose run --rm tools node scripts/reset.js
+  tools:
+    <<: *api-image
+    profiles: ["tools"]
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      API_URL: http://api:3000
+      TOKEN_URL: ${TOKEN_URL:-}
+      AUTH0_DOMAIN: ${AUTH0_DOMAIN}
+      AUTH0_AUDIENCE: ${AUTH0_AUDIENCE}
+      AUTH0_CLIENT_ID: ${AUTH0_CLIENT_ID:-}
+      AUTH0_CLIENT_SECRET: ${AUTH0_CLIENT_SECRET:-}
+      ACCESS_TOKEN: ${ACCESS_TOKEN:-}
+      OTEL_SDK_DISABLED: "true"
+    command: ["node", "scripts/ws-client.js", "2"]
+
+  # Pruebas funcionales (perfil tests): colección Postman con Newman + reporte HTML en docs/evidencias/newman.
+  #   docker compose --profile tests run --rm newman
+  newman:
+    image: dannydainton/htmlextra:latest
+    profiles: ["tests"]
+    entrypoint: ["sh", "/etc/newman/run-newman.sh"]
+    environment:
+      NEWMAN_ENV: ${NEWMAN_ENV:-auth0.postman_environment.example.json}
+      TOKEN_URL: ${TOKEN_URL:-}
+      AUTH0_DOMAIN: ${AUTH0_DOMAIN}
+      AUTH0_AUDIENCE: ${AUTH0_AUDIENCE}
+      AUTH0_CLIENT_ID: ${AUTH0_CLIENT_ID:-}
+      AUTH0_CLIENT_SECRET: ${AUTH0_CLIENT_SECRET:-}
+      AUTH0_LECTOR_CLIENT_ID: ${AUTH0_LECTOR_CLIENT_ID:-}
+      AUTH0_LECTOR_CLIENT_SECRET: ${AUTH0_LECTOR_CLIENT_SECRET:-}
+      API_KEY: ${API_KEY}
+    volumes:
+      - ./tests/postman:/etc/newman:ro
+      - ./docs/evidencias/newman:/reportes
 
 volumes:
   pgdata:
+  lgtm-data:

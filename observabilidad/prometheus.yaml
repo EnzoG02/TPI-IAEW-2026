@@ -1,0 +1,11 @@
+# Configuración de Prometheus dentro de grafana/otel-lgtm (adaptada de la clase 07).
+# Las métricas llegan por OTLP; se promueven atributos del recurso a labels (service_name).
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+otlp:
+  keep_identifying_resource_attributes: true
+  promote_resource_attributes: [service.name, service.namespace, service.instance.id]
+storage:
+  tsdb:
+    out_of_order_time_window: 10m

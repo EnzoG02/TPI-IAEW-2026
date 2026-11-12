@@ -20,6 +20,9 @@ info:
     que avisa al usuario cuando un título por el que espera tiene un cupo reservado para él.
     El handshake exige `Authorization: Bearer` con scope `read:prestamos`.
     Mensajes: schema `MensajeListaEspera`. Detalle en `docs/adr/005-integracion-websocket.md`.
+
+    **Documentación interactiva:** la API sirve este contrato en `/api-docs` (Swagger UI) y
+    `/api-docs/openapi.json`.
 servers:
   - url: http://localhost:3000
     description: Entorno local (docker compose)
@@ -33,6 +36,8 @@ tags:
     description: Préstamo (transacción multi-paso) y devolución de e-books
   - name: Reservas
     description: Lista de espera por título (FIFO)
+  - name: Avisos
+    description: Avisos generados por el worker y por la lista de espera (efecto del flujo asincrónico)
   - name: Operacion
     description: Healthcheck y endpoint de comparación con x-api-key
 
@@ -53,6 +58,16 @@ paths:
                 properties:
                   status: { type: string, examples: [ok] }
                   service: { type: string, examples: [api] }
+        '503':
+          description: La base de datos no responde
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, examples: [degradado] }
+                  service: { type: string, examples: [api] }
+                  db: { type: string, examples: [sin conexión] }
 
   /status/api-key:
     get:
@@ -309,6 +324,7 @@ paths:
       operationId: updateUsuario
       tags: [Usuarios]
       summary: Actualizar usuario (incluye habilitar/bloquear)
+      description: Si el body no incluye `estado`, se conserva el estado actual del usuario.
       security:
         - OAuth2: [write:usuarios]
       requestBody:
@@ -598,6 +614,61 @@ paths:
                   estado: EN_ESPERA
                   posicion: 1
                   createdAt: '2026-09-28T09:00:00Z'
+                  notificadaAt: null
+        '400': { $ref: '#/components/responses/Validacion' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+
+  /avisos:
+    get:
+      operationId: listAvisos
+      tags: [Avisos]
+      summary: Listar avisos (efecto visible del flujo asincrónico)
+      description: |
+        Los avisos los registra el worker al consumir `prestamo.creado` (`PRESTAMO_CONFIRMADO`) y en el job de
+        vencimientos (`RECORDATORIO_DEVOLUCION`, `VENCIMIENTO`); la API registra `CUPO_DISPONIBLE` al notificar
+        por WebSocket. Ordenados del más reciente al más antiguo.
+      security:
+        - OAuth2: [read:prestamos]
+      parameters:
+        - name: usuarioId
+          in: query
+          schema: { type: integer, format: int64 }
+        - name: prestamoId
+          in: query
+          schema: { type: integer, format: int64 }
+        - name: tipo
+          in: query
+          schema: { $ref: '#/components/schemas/TipoAviso' }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: Lista paginada de avisos
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/Aviso' }
+                  page: { type: integer }
+                  pageSize: { type: integer }
+                  total: { type: integer }
+              example:
+                data:
+                  - id: 2
+                    usuarioId: 2
+                    prestamoId: 3
+                    reservaId: null
+                    tipo: PRESTAMO_CONFIRMADO
+                    canal: LOG
+                    createdAt: '2026-09-28T10:00:01Z'
+                page: 1
+                pageSize: 20
+                total: 1
+        '400': { $ref: '#/components/responses/Validacion' }
         '401': { $ref: '#/components/responses/NoAutenticado' }
         '403': { $ref: '#/components/responses/SinPermiso' }
 
@@ -614,7 +685,7 @@ components:
             write:titulos: Crear, modificar y eliminar títulos
             read:usuarios: Leer usuarios
             write:usuarios: Crear, modificar y eliminar usuarios
-            read:prestamos: Leer préstamos y reservas; suscribirse al WebSocket de lista de espera
+            read:prestamos: Leer préstamos, reservas y avisos; suscribirse al WebSocket de lista de espera
             write:prestamos: Crear préstamos y registrar devoluciones
     ApiKeyAuth:
       type: apiKey
@@ -795,6 +866,26 @@ components:
           minimum: 1
           description: Posición en la cola (calculada por antigüedad, no almacenada); null si no está EN_ESPERA
         createdAt: { type: string, format: date-time }
+        notificadaAt:
+          type: [string, 'null']
+          format: date-time
+          description: Momento en que se le avisó que tiene un cupo guardado (estado NOTIFICADA)
+
+    TipoAviso:
+      type: string
+      enum: [PRESTAMO_CONFIRMADO, RECORDATORIO_DEVOLUCION, VENCIMIENTO, CUPO_DISPONIBLE]
+
+    Aviso:
+      type: object
+      required: [id, usuarioId, tipo, canal, createdAt]
+      properties:
+        id: { type: integer, format: int64 }
+        usuarioId: { type: integer, format: int64 }
+        prestamoId: { type: [integer, 'null'], format: int64 }
+        reservaId: { type: [integer, 'null'], format: int64 }
+        tipo: { $ref: '#/components/schemas/TipoAviso' }
+        canal: { type: string, enum: [LOG, WEBSOCKET] }
+        createdAt: { type: string, format: date-time }
 
     Error:
       type: object
@@ -820,6 +911,7 @@ components:
             - CUPO_INVALIDO
             - TITULO_CON_HISTORIAL
             - USUARIO_CON_HISTORIAL
+            - RUTA_NO_ENCONTRADA
             - INTERNO
           description: Código estable y legible por máquina (el `message` puede cambiar)
         message: { type: string }

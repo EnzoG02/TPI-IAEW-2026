@@ -1,9 +1,27 @@
 {
   "name": "biblioteca-worker",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "private": true,
-  "description": "Consumidor de eventos prestamo.creado (placeholder Entrega 1)",
+  "description": "Consumidor de prestamo.creado (avisos) y job de vencimientos y multas",
   "main": "src/index.js",
-  "scripts": { "start": "node src/index.js" },
-  "engines": { "node": ">=20" }
+  "scripts": {
+    "start": "node --require ./src/telemetry.js src/index.js",
+    "test": "node --test test/"
+  },
+  "dependencies": {
+    "@opentelemetry/api": "1.9.0",
+    "@opentelemetry/api-logs": "0.222.0",
+    "@opentelemetry/exporter-logs-otlp-http": "0.222.0",
+    "@opentelemetry/exporter-metrics-otlp-http": "0.222.0",
+    "@opentelemetry/exporter-trace-otlp-http": "0.222.0",
+    "@opentelemetry/resources": "2.11.0",
+    "@opentelemetry/sdk-logs": "0.222.0",
+    "@opentelemetry/sdk-metrics": "2.11.0",
+    "@opentelemetry/sdk-node": "0.222.0",
+    "amqplib": "2.0.1",
+    "pg": "^8.13.1"
+  },
+  "engines": {
+    "node": ">=22"
+  }
 }
