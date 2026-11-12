@@ -2,6 +2,8 @@
 
 > TPI IAEW 2026 · Entrega 2: implementación · Dominio 5
 
+[![CI](https://github.com/EnzoG02/TPI-IAEW-2026/actions/workflows/ci.yml/badge.svg)](https://github.com/EnzoG02/TPI-IAEW-2026/actions/workflows/ci.yml)
+
 API REST para prestar e-books con cupo limitado y lista de espera. Incluye OAuth 2.0/JWT con Auth0, un flujo asincrónico
 con RabbitMQ, avisos en tiempo real por WebSocket, observabilidad con OpenTelemetry y Grafana, y pruebas con
 Postman/Newman y JMeter. Todo se levanta con Docker Compose.
@@ -323,6 +325,18 @@ docker compose --profile carga run --rm jmeter      # reporte: docs/evidencias/c
 ```
 
 Resultados de la corrida entregada: [docs/evidencias/carga/README.md](docs/evidencias/carga/README.md).
+
+**Tests unitarios** (lógica del consumidor y validación contra el contrato, con `node:test`):
+
+```bash
+cd services/worker && npm ci && npm test
+cd services/api && npm ci && npm test
+```
+
+**CI** ([.github/workflows/ci.yml](.github/workflows/ci.yml), opcional con bono): en cada push corre el lint del
+contrato con Redocly, los tests unitarios y una prueba de punta a punta (stack completo con Docker Compose, colección
+con Newman y una carga corta con JMeter que falla si el p95 supera 300 ms o los errores el 1 %). Los reportes quedan
+como artefactos del workflow.
 
 **Sin Auth0 (CI o pruebas locales):** el override `compose.local-auth.yaml` reemplaza Auth0 por un emisor JWT local
 (clientes `local-cliente` / `local-lector`) sin tocar el código de la API:

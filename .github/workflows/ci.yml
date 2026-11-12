@@ -1,0 +1,99 @@
+# CI: lint del contrato, tests unitarios y prueba de punta a punta con Docker Compose.
+# La integración usa el emisor JWT local (compose.local-auth.yaml): no necesita secretos de Auth0.
+name: CI
+
+on:
+  push:
+    branches: [main, entrega-2]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contrato:
+    name: Lint del contrato OpenAPI
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npx --yes @redocly/cli@latest lint api/openapi.yaml
+
+  unitarios:
+    name: Tests unitarios (${{ matrix.servicio }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        servicio: [api, worker]
+    defaults:
+      run:
+        working-directory: services/${{ matrix.servicio }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: services/${{ matrix.servicio }}/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      - run: npm test
+
+  integracion:
+    name: Punta a punta (Compose + Newman + JMeter)
+    runs-on: ubuntu-latest
+    needs: [contrato, unitarios]
+    timeout-minutes: 25
+    env:
+      COMPOSE: docker compose -f docker-compose.yml -f compose.local-auth.yaml
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Preparar .env y carpetas de reportes
+        run: |
+          cp .env.example .env
+          mkdir -p docs/evidencias/newman docs/evidencias/carga
+          chmod -R 777 docs/evidencias
+
+      - name: Levantar el stack
+        run: $COMPOSE up -d --build --wait --wait-timeout 300
+
+      - name: Estado de los servicios
+        run: |
+          $COMPOSE ps -a
+          curl -fsS http://localhost:3000/health
+
+      - name: Colección Postman (Newman)
+        run: $COMPOSE --profile tests run --rm newman
+
+      - name: Prueba de carga corta (JMeter)
+        run: |
+          CARGA_THREADS=5 CARGA_RAMPUP=5 CARGA_DURATION=30 $COMPOSE --profile carga run --rm jmeter
+          python3 - <<'EOF'
+          import json
+          total = json.load(open('docs/evidencias/carga/reporte/statistics.json'))['Total']
+          print(f"requests={total['sampleCount']} errores={total['errorPct']}% p95={total['pct2ResTime']}ms")
+          assert total['errorPct'] < 1, 'tasa de errores >= 1%'
+          assert total['pct2ResTime'] < 300, 'p95 >= 300 ms'
+          EOF
+
+      - name: Logs si algo falló
+        if: failure()
+        run: $COMPOSE logs --no-color migrate api worker broker | tail -n 300
+
+      - name: Reportes
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reportes
+          path: |
+            docs/evidencias/newman/newman-report.html
+            docs/evidencias/carga/reporte
+          if-no-files-found: ignore
+
+      - name: Bajar el stack
+        if: always()
+        run: $COMPOSE down -v
