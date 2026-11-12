@@ -43,3 +43,9 @@ services:
       AUTH0_CLIENT_SECRET: local-secret
       AUTH0_LECTOR_CLIENT_ID: local-lector
       AUTH0_LECTOR_CLIENT_SECRET: local-secret
+
+  jmeter:
+    environment:
+      TOKEN_URL: http://issuer:8080/oauth/token
+      AUTH0_CLIENT_ID: local-cliente
+      AUTH0_CLIENT_SECRET: local-secret

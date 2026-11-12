@@ -1,0 +1,3 @@
+# LF en todos los archivos de texto: los scripts y configs se montan en contenedores Linux.
+* text=auto eol=lf
+*.png binary
